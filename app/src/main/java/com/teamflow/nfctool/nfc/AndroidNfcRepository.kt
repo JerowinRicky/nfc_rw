@@ -7,7 +7,6 @@ import android.nfc.tech.*
 import com.teamflow.nfctool.domain.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.IOException
 
 class AndroidNfcRepository(context: Context) : NfcRepository {
     private val adapter = NfcAdapter.getDefaultAdapter(context)
@@ -20,7 +19,7 @@ class AndroidNfcRepository(context: Context) : NfcRepository {
     override suspend fun readTag(tag: Tag): Result<TagSnapshot> = withContext(Dispatchers.IO) { runCatching {
         val ndef = Ndef.get(tag); val formattable=NdefFormatable.get(tag)
         var message: NdefMessage? = null; var size:Int?=null; var max:Int?=null; var writable:Boolean?=null; var ndefProblem:String?=null
-        if (ndef != null) try { ndef.connect(); message=ndef.ndefMessage; size=ndef.ndefMessage?.toByteArray()?.size ?: 0; max=ndef.maxSize; writable=ndef.isWritable } catch (e: TagLostException) { throw e } catch(e: IOException) { ndefProblem="NDEF interface could not be read: ${e.javaClass.simpleName}" } finally { runCatching { ndef.close() } }
+        if (ndef != null) try { ndef.connect(); message=ndef.ndefMessage; size=ndef.ndefMessage?.toByteArray()?.size ?: 0; max=ndef.maxSize; writable=ndef.isWritable } catch (e: TagLostException) { throw e } catch(e: Exception) { ndefProblem="NDEF interface could not be read: ${e.javaClass.simpleName}" } finally { runCatching { ndef.close() } }
         val techs=technologyDetails(tag, ndef, formattable)
         val protection=when { ndef == null && formattable != null -> ProtectionStatus.WRITABLE
             ndef != null && writable == true -> ProtectionStatus.UNPROTECTED

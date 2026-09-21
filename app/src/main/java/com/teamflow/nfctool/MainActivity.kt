@@ -50,7 +50,14 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
     val history by viewModel.history.collectAsState()
     var showWriter by remember { mutableStateOf(false) }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("NFC Tool") }) }) { padding ->
+    Scaffold(topBar = {
+        TopAppBar(title = {
+            Column {
+                Text("NFC Tool")
+                Text("Safe local reader", style = MaterialTheme.typography.labelSmall)
+            }
+        })
+    }) { padding ->
         when (val current = state) {
             is ScanState.Success -> TagDetails(current.tag, viewModel::reset) { showWriter = true }
             else -> ScanHome(Modifier.padding(padding), viewModel, current, history, activity, openSettings)
@@ -75,7 +82,17 @@ private fun ScanHome(
         modifier = modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { Text("NFC diagnostics", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Ready to scan", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Tap Scan, then hold a 13.56 MHz NFC card near the phone. The app reports detection even when protected card data is unavailable.")
+                }
+            }
+        }
         item {
             InfoCard("NFC status") {
                 Text(when {
@@ -96,7 +113,7 @@ private fun ScanHome(
             ) { Text("Scan NFC tag") }
         }
         if (state is ScanState.Error) item { FailureCard(state.error) }
-        item { Text("Recent scans", style = MaterialTheme.typography.titleLarge) }
+        item { Text("Recent scans", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         if (history.isEmpty()) item { Text("No completed scans yet.") }
         else items(history, key = { it.id }) { entry ->
             InfoCard(entry.uid ?: "UID unavailable") {
@@ -116,7 +133,20 @@ private fun TagDetails(tag: TagSnapshot, onBack: () -> Unit, onWrite: () -> Unit
     ) {
         item {
             TextButton(onClick = onBack) { Text("Back to scanner") }
-            Text("Tag details", style = MaterialTheme.typography.headlineSmall)
+            Text("Card detected", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Android detected this NFC card. Only data exposed through public Android APIs is shown.")
+        }
+        if (!tag.ndefSupported || tag.ndefRecords.isEmpty()) item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Card data is not exposed", fontWeight = FontWeight.Bold)
+                    Text("This card was detected, but it does not expose readable NDEF data to Android. It may use a protected, proprietary, or unsupported access-card format.")
+                    Text(tag.protectionReason, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
         item {
             InfoCard("Overview") {
@@ -126,9 +156,11 @@ private fun TagDetails(tag: TagSnapshot, onBack: () -> Unit, onWrite: () -> Unit
                 Detail("Protection", tag.protection.label)
             }
         }
-        item { Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write NDEF record") } }
+        if (tag.ndefSupported && tag.writable == true) item {
+            Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write NDEF record") }
+        }
         item { Text("NDEF records", style = MaterialTheme.typography.titleLarge) }
-        if (tag.ndefRecords.isEmpty()) item { Text("No readable NDEF records are exposed by this tag.") }
+        if (tag.ndefRecords.isEmpty()) item { Text("No readable NDEF records are exposed by this card.") }
         else items(tag.ndefRecords, key = { it.rawHex }) { record ->
             InfoCard(record.kind) {
                 Detail("Type", record.type)
@@ -166,7 +198,10 @@ private fun WriteDialog(onDismiss: () -> Unit, onWrite: (android.nfc.NdefRecord)
 
 @Composable
 private fun InfoCard(title: String, content: @Composable () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(title, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
