@@ -41,6 +41,7 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
     val history by viewModel.history.collectAsState()
     var writerFor by remember { mutableStateOf<TagSnapshot?>(null) }
     var confirmFormat by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -50,7 +51,11 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
         when (val current = state) {
             is ScanState.Success -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true })
             is ScanState.Partial -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true })
-            else -> HomeScreen(contentModifier, viewModel, current, history, activity, openSettings)
+            else -> if (showHistory) {
+                HistoryScreen(contentModifier, history, onBack = { showHistory = false }, onDelete = viewModel::deleteHistory)
+            } else {
+                HomeScreen(contentModifier, viewModel, current, history, activity, openSettings, onShowHistory = { showHistory = true })
+            }
         }
     }
     writerFor?.let { tag -> WriteDialog(tag, onDismiss = { writerFor = null }, onWrite = { records -> writerFor = null; viewModel.write(records) }) }
@@ -66,7 +71,7 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
 }
 
 @Composable
-private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, history: List<HistoryItem>, activity: MainActivity, openSettings: () -> Unit) {
+private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, history: List<HistoryItem>, activity: MainActivity, openSettings: () -> Unit, onShowHistory: () -> Unit) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -80,11 +85,33 @@ private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, h
         if (state is ScanState.Error) item { FailureCard(state.error, { vm.scan(activity) }) }
         item { Text("Scan history", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         if (history.isEmpty()) item { Text("No completed scans yet. NFC payloads are not saved to history.") }
-        else items(history, key = { it.id }) { entry ->
+        else items(history.take(3), key = { it.id }) { entry ->
             InfoCard(entry.uid ?: "UID unavailable") {
                 Text("${entry.technologies} · ${entry.records} NDEF record(s)")
                 Text("Write access: ${entry.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown"}")
                 TextButton(onClick = { vm.deleteHistory(entry.id) }) { Text("Remove") }
+            }
+        }
+        if (history.isNotEmpty()) item { TextButton(onClick = onShowHistory, modifier = Modifier.fillMaxWidth()) { Text("View full history (${history.size})") } }
+    }
+}
+
+@Composable
+private fun HistoryScreen(modifier: Modifier, history: List<HistoryItem>, onBack: () -> Unit, onDelete: (Long) -> Unit) {
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
+        item {
+            TextButton(onClick = onBack) { Text("Back to NFC Tool") }
+            Text("Scan history", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Scan metadata only — NDEF payloads are not stored.")
+        }
+        if (history.isEmpty()) item { Text("No completed scans yet.") }
+        else items(history, key = { it.id }) { entry ->
+            InfoCard(entry.uid ?: "UID unavailable") {
+                Text(entry.technologies)
+                Detail("NDEF records", entry.records.toString())
+                Detail("Write access", entry.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown")
+                Detail("Protection", entry.protection.label)
+                TextButton(onClick = { onDelete(entry.id) }) { Text("Delete scan") }
             }
         }
     }
