@@ -54,7 +54,11 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
     var cloneDestination by remember { mutableStateOf<TagSnapshot?>(null) }
 
     LaunchedEffect(state, cloneStage) {
-        val tag = when (state) { is ScanState.Success -> state.tag; is ScanState.Partial -> state.tag; else -> null }
+        val tag = when (val currentState = state) {
+            is ScanState.Success -> currentState.tag
+            is ScanState.Partial -> currentState.tag
+            else -> null
+        }
         if (cloneStage == CloneStage.SOURCE_SCANNING && tag != null) {
             cloneSource = tag
             cloneOriginal = tag.ndefRecords.mapIndexed { index, record -> NdefCodec.editable(record, index.toLong()) }
