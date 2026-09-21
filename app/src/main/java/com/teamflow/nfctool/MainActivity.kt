@@ -383,6 +383,10 @@ private fun CloneEditScreen(
     setStage: (CloneStage) -> Unit,
     close: () -> Unit
 ) {
+    if (stage == CloneStage.INTRO) {
+        CloneIntroScreen(modifier, scanSource, close)
+        return
+    }
     var editing by remember { mutableStateOf<EditableNdefRecord?>(null) }
     val built = remember(edited) { runCatching { edited.map(NdefCodec::build) } }
     val messageSize = built.getOrNull()?.let { android.nfc.NdefMessage(it.toTypedArray()).toByteArray().size }
@@ -393,12 +397,7 @@ private fun CloneEditScreen(
             Text("Replicates only public, Android-exposed NDEF records to a compatible writable NDEF tag. UID, hardware identity, protected applications, and credentials are never copied.")
         }
         when (stage) {
-            CloneStage.INTRO -> item {
-                InfoCard("Step 1: source tag") {
-                    Text("Scan the source tag. Only readable NDEF records can be edited and reproduced.")
-                    Button(onClick = scanSource, modifier = Modifier.fillMaxWidth()) { Text("Scan source tag") }
-                }
-            }
+            CloneStage.INTRO -> item { }
             CloneStage.SOURCE_SCANNING -> item { ProgressCard("Scanning source tag", "Hold the source tag near the phone.") }
             CloneStage.EDIT -> {
                 item { CloneSourceCard(source, original, edited) }
@@ -439,6 +438,29 @@ private fun CloneEditScreen(
         }
     }
     editing?.let { record -> EditNdefRecordDialog(record, onDismiss = { editing = null }, onSave = { changed -> updateRecords(edited.filterNot { it.id == changed.id } + changed); editing = null }) }
+}
+
+@Composable
+private fun CloneIntroScreen(modifier: Modifier, scanSource: () -> Unit, close: () -> Unit) {
+    LazyColumn(
+        modifier.fillMaxSize().padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(vertical = 20.dp)
+    ) {
+        item {
+            TextButton(onClick = close) { Text("Back to NFC Tool") }
+            Text("Clone & Edit NDEF data", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        }
+        item {
+            InfoCard("NDEF data replication") {
+                Text("Create an editable copy of public NDEF records and write it to a compatible writable NDEF tag.")
+                Text("Not copied: UID, physical tag identity, protected applications, credentials, authentication data, or inaccessible memory.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        item {
+            Button(onClick = scanSource, modifier = Modifier.fillMaxWidth()) { Text("Scan source tag") }
+        }
+    }
 }
 
 @Composable
