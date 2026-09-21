@@ -67,3 +67,14 @@ data class HistoryItem(
     val protection: ProtectionStatus,
     val records: Int
 )
+
+/** A local copy of an Android-exposed NDEF message, never a hardware-card clone. */
+data class NdefProfile(
+    val id: Long,
+    val name: String,
+    val createdAt: Long,
+    val sourceUid: String?,
+    val technologies: String,
+    val recordCount: Int,
+    val messageBase64: String
+)

@@ -6,11 +6,13 @@ import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.Tag
 import android.nfc.TagLostException
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.teamflow.nfctool.domain.HistoryItem
 import com.teamflow.nfctool.domain.NdefAvailability
 import com.teamflow.nfctool.domain.NfcFailure
+import com.teamflow.nfctool.domain.NdefProfile
 import com.teamflow.nfctool.domain.ProtectionStatus
 import com.teamflow.nfctool.domain.ScanState
 import com.teamflow.nfctool.domain.TagSnapshot
@@ -27,6 +29,10 @@ class NfcViewModel(private val repository: NfcRepository, private val context: C
     val state: StateFlow<ScanState> = _state.asStateFlow()
     private val _history = MutableStateFlow(loadHistory())
     val history: StateFlow<List<HistoryItem>> = _history.asStateFlow()
+    private val _profiles = MutableStateFlow(loadProfiles())
+    val profiles: StateFlow<List<NdefProfile>> = _profiles.asStateFlow()
+    private val _selectedProfile = MutableStateFlow<NdefProfile?>(null)
+    val selectedProfile: StateFlow<NdefProfile?> = _selectedProfile.asStateFlow()
     private var currentTag: Tag? = null
 
     fun supported() = repository.isSupported()
@@ -75,6 +81,32 @@ class NfcViewModel(private val repository: NfcRepository, private val context: C
             _state.value = ScanState.Writing
             repository.writeNdef(tag, NdefMessage(records.toTypedArray())).fold(
                 onSuccess = { _state.value = ScanState.WriteSuccess("NDEF data was written. Keep the tag in place while its capabilities refresh."); refreshTagCapabilities() },
+                onFailure = ::mapError
+            )
+        }
+    }
+
+    fun saveReadableNdefProfile(tag: TagSnapshot, name: String) {
+        val raw = tag.rawNdef ?: return fail("No readable NDEF data", "The tag did not expose an NDEF message.", "Only Android-exposed NDEF data can be saved as a profile.")
+        val profile = NdefProfile(System.currentTimeMillis(), name.ifBlank { "NDEF profile" }, System.currentTimeMillis(), tag.uid, tag.technologies.joinToString { it.name }, tag.ndefRecords.size, Base64.encodeToString(raw, Base64.NO_WRAP))
+        _profiles.value = (listOf(profile) + _profiles.value).take(30)
+        persistProfiles()
+    }
+
+    fun selectProfile(profile: NdefProfile) { _selectedProfile.value = profile }
+    fun clearSelectedProfile() { _selectedProfile.value = null }
+    fun deleteProfile(id: Long) { _profiles.value = _profiles.value.filterNot { it.id == id }; if (_selectedProfile.value?.id == id) clearSelectedProfile(); persistProfiles() }
+
+    fun writeSelectedProfile() {
+        val profile = _selectedProfile.value ?: return fail("No profile selected", "No local NDEF profile is active.", "Select a saved NDEF profile first.")
+        val message = runCatching { NdefMessage(Base64.decode(profile.messageBase64, Base64.NO_WRAP)) }.getOrElse {
+            return fail("Invalid profile", "${it.javaClass.simpleName}: ${it.message}", "Delete this profile and create it again from a readable NDEF tag.")
+        }
+        val tag = currentTag ?: return fail("No active NFC tag", "No target Tag object is retained.", "Scan a compatible writable target tag and keep it near the phone.")
+        viewModelScope.launch {
+            _state.value = ScanState.Writing
+            repository.writeNdef(tag, message).fold(
+                onSuccess = { _selectedProfile.value = null; refreshTagCapabilities() },
                 onFailure = ::mapError
             )
         }
@@ -129,5 +161,19 @@ class NfcViewModel(private val repository: NfcRepository, private val context: C
         val array = JSONArray()
         _history.value.forEach { item -> array.put(JSONObject().put("id", item.id).put("time", item.timestamp).put("uid", item.uid ?: "").put("tech", item.technologies).put("ndef", item.ndef).put("writable", item.writable).put("protection", item.protection.name).put("records", item.records)) }
         prefs().edit().putString("items", array.toString()).apply()
+    }
+
+    private fun loadProfiles(): List<NdefProfile> = runCatching {
+        val array = JSONArray(prefs().getString("profiles", "[]"))
+        List(array.length()) { index ->
+            val item = array.getJSONObject(index)
+            NdefProfile(item.getLong("id"), item.getString("name"), item.getLong("created"), item.optString("uid").ifBlank { null }, item.getString("tech"), item.getInt("records"), item.getString("message"))
+        }
+    }.getOrDefault(emptyList())
+
+    private fun persistProfiles() {
+        val array = JSONArray()
+        _profiles.value.forEach { profile -> array.put(JSONObject().put("id", profile.id).put("name", profile.name).put("created", profile.createdAt).put("uid", profile.sourceUid ?: "").put("tech", profile.technologies).put("records", profile.recordCount).put("message", profile.messageBase64)) }
+        prefs().edit().putString("profiles", array.toString()).apply()
     }
 }

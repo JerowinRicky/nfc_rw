@@ -39,9 +39,13 @@ class MainActivity : ComponentActivity() {
 private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSettings: () -> Unit) {
     val state by viewModel.state.collectAsState()
     val history by viewModel.history.collectAsState()
+    val profiles by viewModel.profiles.collectAsState()
+    val selectedProfile by viewModel.selectedProfile.collectAsState()
     var writerFor by remember { mutableStateOf<TagSnapshot?>(null) }
     var confirmFormat by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var showProfiles by remember { mutableStateOf(false) }
+    var profileToSave by remember { mutableStateOf<TagSnapshot?>(null) }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -49,12 +53,14 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
     ) { padding ->
         val contentModifier = Modifier.padding(padding).consumeWindowInsets(padding)
         when (val current = state) {
-            is ScanState.Success -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true })
-            is ScanState.Partial -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true })
+            is ScanState.Success -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true }, { profileToSave = current.tag }, selectedProfile)
+            is ScanState.Partial -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true }, { profileToSave = current.tag }, selectedProfile)
             else -> if (showHistory) {
                 HistoryScreen(contentModifier, history, onBack = { showHistory = false }, onDelete = viewModel::deleteHistory)
+            } else if (showProfiles) {
+                ProfilesScreen(contentModifier, profiles, selectedProfile, onBack = { showProfiles = false }, onUse = { viewModel.selectProfile(it); showProfiles = false }, onDelete = viewModel::deleteProfile)
             } else {
-                HomeScreen(contentModifier, viewModel, current, history, activity, openSettings, onShowHistory = { showHistory = true })
+                HomeScreen(contentModifier, viewModel, current, history, profiles, activity, openSettings, onShowHistory = { showHistory = true }, onShowProfiles = { showProfiles = true })
             }
         }
     }
@@ -68,10 +74,11 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
             confirmButton = { Button(onClick = { confirmFormat = false; viewModel.formatAsNdef() }) { Text("Format") } }
         )
     }
+    profileToSave?.let { tag -> ProfileNameDialog(onDismiss = { profileToSave = null }, onSave = { name -> viewModel.saveReadableNdefProfile(tag, name); profileToSave = null }) }
 }
 
 @Composable
-private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, history: List<HistoryItem>, activity: MainActivity, openSettings: () -> Unit, onShowHistory: () -> Unit) {
+private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, history: List<HistoryItem>, profiles: List<NdefProfile>, activity: MainActivity, openSettings: () -> Unit, onShowHistory: () -> Unit, onShowProfiles: () -> Unit) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -93,6 +100,9 @@ private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, h
             }
         }
         if (history.isNotEmpty()) item { TextButton(onClick = onShowHistory, modifier = Modifier.fillMaxWidth()) { Text("View full history (${history.size})") } }
+        item { Text("Saved NDEF profiles", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        item { Text("Profiles contain only readable NDEF messages. They do not copy UID, hardware identity, credentials, or protected data.") }
+        item { TextButton(onClick = onShowProfiles, modifier = Modifier.fillMaxWidth()) { Text("Manage profiles (${profiles.size})") } }
     }
 }
 
@@ -115,6 +125,41 @@ private fun HistoryScreen(modifier: Modifier, history: List<HistoryItem>, onBack
             }
         }
     }
+}
+
+@Composable
+private fun ProfilesScreen(modifier: Modifier, profiles: List<NdefProfile>, selected: NdefProfile?, onBack: () -> Unit, onUse: (NdefProfile) -> Unit, onDelete: (Long) -> Unit) {
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
+        item {
+            TextButton(onClick = onBack) { Text("Back to NFC Tool") }
+            Text("Saved NDEF profiles", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("A profile reproduces only the readable NDEF message on a compatible writable NDEF tag. UID, tag hardware identity, protected applications, and generic card emulation are not copied.")
+        }
+        selected?.let { profile -> item { InfoCard("Selected for next writable tag") { Text(profile.name); TextButton(onClick = onBack) { Text("Scan a target tag") } } } }
+        if (profiles.isEmpty()) item { Text("Save a readable NDEF message from a scan result to create a profile.") }
+        else items(profiles, key = { it.id }) { profile ->
+            InfoCard(profile.name) {
+                Detail("Source UID", profile.sourceUid ?: unavailable())
+                Detail("Detected technologies", profile.technologies)
+                Detail("NDEF records", profile.recordCount.toString())
+                Button(onClick = { onUse(profile) }, modifier = Modifier.fillMaxWidth()) { Text("Use on a writable tag") }
+                TextButton(onClick = { onDelete(profile.id) }) { Text("Delete profile") }
+            }
+        }
+        item { Text("Phone card emulation is unavailable for arbitrary physical NFC tags. Use an approved access-control mobile credential or a custom HCE protocol designed for a system you administer.", style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+@Composable
+private fun ProfileNameDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save NDEF profile") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("This saves only the NDEF message Android read. It does not save or clone UID, hardware identity, protected credentials, or inaccessible data."); OutlinedTextField(name, { name = it }, label = { Text("Profile name") }, modifier = Modifier.fillMaxWidth()) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { Button(onClick = { onSave(name) }) { Text("Save") } }
+    )
 }
 
 @Composable
@@ -143,7 +188,7 @@ private fun ScanPanel(vm: NfcViewModel, state: ScanState, activity: MainActivity
 }
 
 @Composable
-private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel, activity: MainActivity, onWrite: () -> Unit, onFormat: () -> Unit) {
+private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel, activity: MainActivity, onWrite: () -> Unit, onFormat: () -> Unit, onSaveProfile: () -> Unit, selectedProfile: NdefProfile?) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
         item {
             Text("NFC Tag Details", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -160,7 +205,8 @@ private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel,
         item { Text("NDEF data", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         if (tag.ndefRecords.isEmpty()) item { NdefDiagnosisCard(tag) }
         else items(tag.ndefRecords, key = { it.rawHex }) { record -> NdefRecordCard(record) }
-        item { WriteActions(tag, onWrite, onFormat) }
+        item { WriteActions(tag, onWrite, onFormat, selectedProfile, vm::writeSelectedProfile, vm::clearSelectedProfile) }
+        if (tag.rawNdef != null) item { OutlinedButton(onClick = onSaveProfile, modifier = Modifier.fillMaxWidth()) { Text("Save readable NDEF as profile") } }
         item { TechnologiesCard(tag) }
         item { SecurityCard(tag) }
         item { TechnicalDetailsCard(tag) }
@@ -220,9 +266,16 @@ private fun NdefRecordCard(record: NdefRecordInfo) = InfoCard("${record.kind} re
 }
 
 @Composable
-private fun WriteActions(tag: TagSnapshot, onWrite: () -> Unit, onFormat: () -> Unit) = InfoCard("Actions") {
+private fun WriteActions(tag: TagSnapshot, onWrite: () -> Unit, onFormat: () -> Unit, selectedProfile: NdefProfile?, writeSelectedProfile: () -> Unit, clearSelectedProfile: () -> Unit) = InfoCard("Actions") {
     when {
-        tag.writable == true -> Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write to tag") }
+        tag.writable == true -> {
+            Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write new NDEF data") }
+            selectedProfile?.let { profile ->
+                Spacer(Modifier.height(6.dp))
+                Button(onClick = writeSelectedProfile, modifier = Modifier.fillMaxWidth()) { Text("Write profile: ${profile.name}") }
+                TextButton(onClick = clearSelectedProfile) { Text("Clear selected profile") }
+            }
+        }
         tag.formatable && tag.ndefAvailability == NdefAvailability.FORMATABLE -> Button(onClick = onFormat, modifier = Modifier.fillMaxWidth()) { Text("Format as NDEF") }
         else -> Text("Writing unavailable: ${if (tag.writable == false) "the exposed NDEF interface is read-only." else "no writable NDEF interface is currently exposed."}")
     }
