@@ -142,18 +142,75 @@ class AndroidNfcRepository(context: Context) : NfcRepository {
     private fun technologyDetails(tag: Tag, ndef: Ndef?, formatable: NdefFormatable?): List<TechInfo> =
         tag.techList.map { name -> runCatching {
             when (name) {
-                NfcA::class.java.name -> NfcA.get(tag)?.let { TechInfo("NFC-A", listOf("ATQA" to (it.atqa?.hex() ?: unavailable()), "SAK" to "%02X".format(it.sak))) }
-                NfcB::class.java.name -> NfcB.get(tag)?.let { TechInfo("NFC-B", listOf("Application data" to it.applicationData.hex(), "Protocol info" to it.protocolInfo.hex())) }
-                NfcF::class.java.name -> NfcF.get(tag)?.let { TechInfo("NFC-F", listOf("System code" to it.systemCode.hex(), "Manufacturer" to it.manufacturer.hex())) }
-                NfcV::class.java.name -> NfcV.get(tag)?.let { TechInfo("NFC-V", listOf("DSF ID" to "%02X".format(it.dsfId), "Response flags" to "%02X".format(it.responseFlags))) }
-                IsoDep::class.java.name -> IsoDep.get(tag)?.let { TechInfo("ISO-DEP", listOf("Historical bytes" to (it.historicalBytes?.hex() ?: unavailable()), "Hi-layer response" to (it.hiLayerResponse?.hex() ?: unavailable()), "Max transceive" to "${it.maxTransceiveLength} bytes")) }
-                MifareClassic::class.java.name -> MifareClassic.get(tag)?.let { TechInfo("MIFARE Classic", listOf("Size" to "${it.size} bytes", "Sectors" to it.sectorCount.toString(), "Authentication" to "Not attempted")) }
-                MifareUltralight::class.java.name -> MifareUltralight.get(tag)?.let { TechInfo("MIFARE Ultralight", listOf("Type" to it.type.toString(), "Authentication" to "Not attempted")) }
-                Ndef::class.java.name -> TechInfo("NDEF", listOf("Format" to (ndef?.type ?: unavailable())))
-                NdefFormatable::class.java.name -> TechInfo("NDEF formatable", listOf("Available" to (formatable != null).toString()))
-                else -> TechInfo(name.substringAfterLast('.'), listOf("Status" to "Detected by Android"))
-            } ?: TechInfo(name.substringAfterLast('.'), listOf("Status" to unavailable()))
-        }.getOrElse { TechInfo(name.substringAfterLast('.'), listOf("Status" to unavailable())) } }
+                NfcA::class.java.name -> NfcA.get(tag)?.let { nfcA ->
+                    val details = mutableListOf<Pair<String, String>>()
+                    nfcA.atqa?.let { details.add("ATQA" to it.hex()) }
+                    details.add("SAK" to "%02X".format(nfcA.sak))
+                    TechInfo("NFC-A", details)
+                }
+                NfcB::class.java.name -> NfcB.get(tag)?.let { nfcB ->
+                    val details = mutableListOf<Pair<String, String>>()
+                    if (nfcB.applicationData.isNotEmpty()) details.add("Application data" to nfcB.applicationData.hex())
+                    if (nfcB.protocolInfo.isNotEmpty()) details.add("Protocol info" to nfcB.protocolInfo.hex())
+                    TechInfo("NFC-B", details)
+                }
+                NfcF::class.java.name -> NfcF.get(tag)?.let { nfcF ->
+                    val details = mutableListOf<Pair<String, String>>()
+                    if (nfcF.systemCode.isNotEmpty()) details.add("System code" to nfcF.systemCode.hex())
+                    if (nfcF.manufacturer.isNotEmpty()) details.add("Manufacturer" to nfcF.manufacturer.hex())
+                    TechInfo("NFC-F", details)
+                }
+                NfcV::class.java.name -> NfcV.get(tag)?.let { nfcV ->
+                    TechInfo("NFC-V", listOf("DSF ID" to "%02X".format(nfcV.dsfId), "Response flags" to "%02X".format(nfcV.responseFlags)))
+                }
+                IsoDep::class.java.name -> IsoDep.get(tag)?.let { iso ->
+                    val details = mutableListOf<Pair<String, String>>()
+                    iso.historicalBytes?.let { details.add("Historical bytes (Type A ATS)" to it.hex()) }
+                    iso.hiLayerResponse?.let { details.add("Hi-layer response (Type B ATTRIB)" to it.hex()) }
+                    if (iso.historicalBytes == null && iso.hiLayerResponse == null) {
+                        details.add("ISO-DEP type" to "ISO 14443-4 standard")
+                    }
+                    details.add("Max transceive" to "${iso.maxTransceiveLength} bytes")
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                        details.add("Extended APDU support" to iso.isExtendedLengthApduSupported.toString())
+                    }
+                    runCatching {
+                        if (!iso.isConnected) iso.connect()
+                        val apduResult = probeIsoDepSmartCard(iso)
+                        if (apduResult.isNotBlank()) {
+                            details.add("Smart Card AID" to apduResult)
+                        }
+                    }
+                    runCatching { iso.close() }
+                    TechInfo("ISO-DEP", details)
+                }
+                MifareClassic::class.java.name -> MifareClassic.get(tag)?.let { TechInfo("MIFARE Classic", listOf("Size" to "${it.size} bytes", "Sectors" to it.sectorCount.toString(), "Blocks" to it.blockCount.toString())) }
+                MifareUltralight::class.java.name -> MifareUltralight.get(tag)?.let { TechInfo("MIFARE Ultralight", listOf("Type" to it.type.toString())) }
+                Ndef::class.java.name -> TechInfo("NDEF", listOf("Format" to (ndef?.type ?: "Standard NDEF")))
+                NdefFormatable::class.java.name -> TechInfo("NDEF formatable", listOf("Status" to "Can be formatted as NDEF"))
+                else -> TechInfo(name.substringAfterLast('.'), listOf("Status" to "Detected"))
+            } ?: TechInfo(name.substringAfterLast('.'), listOf("Status" to "Detected"))
+        }.getOrElse { TechInfo(name.substringAfterLast('.'), listOf("Status" to "Detected")) } }
+
+    private fun probeIsoDepSmartCard(iso: IsoDep): String {
+        val probes = listOf(
+            byteArrayOf(0x00.toByte(), 0xA4.toByte(), 0x04.toByte(), 0x00.toByte(), 0x07.toByte(), 0xD2.toByte(), 0x76.toByte(), 0x00.toByte(), 0x00.toByte(), 0x85.toByte(), 0x01.toByte(), 0x01.toByte(), 0x00.toByte()) to "NFC Type 4 NDEF App",
+            byteArrayOf(0x00.toByte(), 0xA4.toByte(), 0x04.toByte(), 0x00.toByte(), 0x0E.toByte(), '2'.code.toByte(), 'P'.code.toByte(), 'A'.code.toByte(), 'Y'.code.toByte(), '.'.code.toByte(), 'S'.code.toByte(), 'Y'.code.toByte(), 'S'.code.toByte(), '.'.code.toByte(), 'D'.code.toByte(), 'D'.code.toByte(), 'F'.code.toByte(), '0'.code.toByte(), '1'.code.toByte(), 0x00.toByte()) to "EMV Payment (PPSE)",
+            byteArrayOf(0x00.toByte(), 0xA4.toByte(), 0x04.toByte(), 0x00.toByte(), 0x07.toByte(), 0xA0.toByte(), 0x00.toByte(), 0x00.toByte(), 0x02.toByte(), 0x47.toByte(), 0x10.toByte(), 0x01.toByte(), 0x00.toByte()) to "ICAO ePassport App",
+            byteArrayOf(0x90.toByte(), 0x60.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte()) to "MIFARE DESFire Native"
+        )
+        for ((apdu, name) in probes) {
+            val res = runCatching { iso.transceive(apdu) }.getOrNull()
+            if (res != null && res.size >= 2) {
+                val sw1 = res[res.size - 2].toInt() and 0xFF
+                val sw2 = res[res.size - 1].toInt() and 0xFF
+                if (sw1 == 0x90 || sw1 == 0x61 || (sw1 == 0x91 && sw2 == 0xAF)) {
+                    return "$name (SW=%02X%02X)".format(sw1, sw2)
+                }
+            }
+        }
+        return ""
+    }
 
     private fun unavailable() = "Unavailable through Android API"
 }
