@@ -1,54 +1,189 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.teamflow.nfctool
 
 import android.content.Intent
-import android.provider.Settings
 import android.os.Bundle
+import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.teamflow.nfctool.domain.*
+import com.teamflow.nfctool.domain.HistoryItem
+import com.teamflow.nfctool.domain.NfcFailure
+import com.teamflow.nfctool.domain.ScanState
+import com.teamflow.nfctool.domain.TagSnapshot
 import com.teamflow.nfctool.nfc.NdefCodec
-import com.teamflow.nfctool.presentation.*
+import com.teamflow.nfctool.presentation.NfcViewModel
+import com.teamflow.nfctool.presentation.NfcViewModelFactory
 
-class MainActivity:ComponentActivity() {
-    private val vm:NfcViewModel by viewModels { NfcViewModelFactory(this) }
-    override fun onCreate(savedInstanceState:Bundle?) { super.onCreate(savedInstanceState); setContent { MaterialTheme(colorScheme = if(androidx.compose.foundation.isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) { NfcToolApp(vm, { startActivity(Intent(Settings.ACTION_NFC_SETTINGS)) }) } } }
-    override fun onPause(){ super.onPause(); vm.stop(this) }
+class MainActivity : ComponentActivity() {
+    private val viewModel: NfcViewModel by viewModels { NfcViewModelFactory(this) }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme {
+                NfcToolApp(viewModel, this) {
+                    startActivity(Intent(AndroidSettings.ACTION_NFC_SETTINGS))
+                }
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        viewModel.stop(this)
+    }
 }
 
-@Composable fun NfcToolApp(vm:NfcViewModel, openSettings:()->Unit) {
-    var tab by remember { mutableIntStateOf(0) }; var composingWrite by remember { mutableStateOf(false) }; val state by vm.state.collectAsState(); val history by vm.history.collectAsState()
-    Scaffold(topBar={ TopAppBar(title={Text("NFC TOOL",fontWeight=FontWeight.Bold)}) }, bottomBar={ NavigationBar { listOf("Home" to Icons.Default.Home,"Scan" to Icons.Default.Nfc,"History" to Icons.Default.History,"Settings" to Icons.Default.Settings).forEachIndexed { i,(label,icon) -> NavigationBarItem(tab==i,{tab=i},icon={Icon(icon,label)},label={Text(label)}) } } }) { padding -> Box(Modifier.padding(padding)) { when { composingWrite || state is ScanState.Writing || state is ScanState.WriteSuccess -> WriteScreen(vm, state, { composingWrite=false; vm.reset() }); state is ScanState.Success -> TagDetails((state as ScanState.Success).tag, { vm.reset() }, { composingWrite=true }); else -> when(tab) { 0 -> Home(vm,openSettings,{tab=1}); 1 -> Scan(vm,state); 2 -> History(history,vm); else -> Settings(vm) } } } }
-}
-@Composable private fun Home(vm:NfcViewModel,settings:()->Unit, scan:()->Unit)=LazyColumn(Modifier.fillMaxSize().padding(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) { item { Text("Advanced NFC diagnostics",style=MaterialTheme.typography.headlineSmall) }; item { StatusCard(vm,settings) }; item { Button({scan()},Modifier.fillMaxWidth(),enabled=vm.supported()&&vm.enabled()){Icon(Icons.Default.Nfc,null); Spacer(Modifier.width(8.dp)); Text("Scan NFC Tag")} }; item { Text("Hold your NFC card or tag near the back of your phone. NFC data stays on this device.",style=MaterialTheme.typography.bodyLarge) }; item { InfoCard("Safety boundary","This tool does not authenticate, guess passwords, bypass access controls, or access payment, identity, transit, or secure-element credentials.") } }
-@Composable private fun StatusCard(vm:NfcViewModel,settings:()->Unit)=Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){val (title,detail,color)=when { !vm.supported()->Triple("NFC unavailable","This device does not support NFC.",Color.Red); vm.enabled()->Triple("NFC enabled","Reader Mode will scan while this app is in the foreground.",Color(0xFF138A36)); else->Triple("NFC is disabled","Enable it in Android Settings to scan tags.",Color(0xFFE68100))}; Text(title,color=color,fontWeight=FontWeight.Bold); Text(detail); if(vm.supported()&&!vm.enabled()) TextButton(settings){Text("Open NFC Settings")} } }
-@Composable private fun Scan(vm:NfcViewModel,state:ScanState)=Box(Modifier.fillMaxSize().padding(24.dp),contentAlignment=Alignment.Center){Column(horizontalAlignment=Alignment.Center,verticalArrangement=Arrangement.spacedBy(20.dp)){Icon(Icons.Default.Nfc,null,Modifier.size(88.dp),tint=MaterialTheme.colorScheme.primary); Text(when(state){ScanState.Scanning->"Waiting for tag…";ScanState.Reading->"NFC tag detected\nReading…";is ScanState.Error->(state as ScanState.Error).error.message;else->"Hold your NFC tag near your phone"},style=MaterialTheme.typography.headlineSmall); if(state is ScanState.Error) ErrorCard(state.error); Button({vm.scan(LocalContext.current as MainActivity)},enabled=state !is ScanState.Reading && vm.enabled()){Text(if(state is ScanState.Scanning) "Restart scan" else "Scan NFC Tag")} } }
-@Composable private fun TagDetails(t:TagSnapshot,back:()->Unit,write:()->Unit){var section by remember{mutableIntStateOf(0)}; Scaffold(topBar={TopAppBar(title={Text("Tag Overview")},navigationIcon={IconButton(back){Icon(Icons.Default.ArrowBack,"Back")}},actions={IconButton(write){Icon(Icons.Default.Edit,"Write")}})},bottomBar={TabRow(section){listOf("Overview","NDEF","Raw","Security","Technology").forEachIndexed{i,s->Tab(section==i,{section=i},text={Text(s)})}}}){p->LazyColumn(Modifier.padding(p).fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){when(section){0->overview(t);1->ndef(t);2->raw(t);3->security(t);else->technologies(t)}}}}
-private fun LazyListScope.overview(t:TagSnapshot){item{StatusSummary(t)};item{Expand("Tag Information"){KeyValue("Tag ID / UID",t.uid?:"Unavailable through Android API");KeyValue("NDEF",if(t.ndefSupported)"Supported" else "Not exposed");KeyValue("Capacity",t.maxSize?.let{"$it bytes"}?:"Unavailable through Android API");KeyValue("Used",t.ndefSize?.let{"$it bytes"}?:"Unavailable through Android API");KeyValue("Writable",t.writable?.let{if(it)"Yes" else "No"}?:"Unknown")}};item{Expand("Can This Tag Be Read?"){listOf("Tag detected" to "Yes — NFC hardware detected a tag.","UID" to (if(t.uid!=null)"Available" else "Unavailable through Android API"),"NDEF" to if(t.ndefSupported)"Available" else "Not exposed by this tag/interface","Read" to if(t.ndefRecords.isNotEmpty())"Accessible NDEF data" else "No accessible NDEF records","Write" to (t.writable?.let{if(it)"Supported" else "Not supported"}?:"Unknown"),"Raw memory" to "Unavailable unless a public technology API exposes it").forEach{KeyValue(it.first,it.second)}}}}
-private fun LazyListScope.ndef(t:TagSnapshot){if(t.ndefRecords.isEmpty()) item{InfoCard("NDEF Message",if(t.ndefSupported)"No NDEF message is currently exposed. This is different from proving the tag has no data." else "NDEF is unavailable through the exposed Android interface.")} else items(t.ndefRecords.size){i->val r=t.ndefRecords[i]; Expand("Record #${i+1} · ${r.kind}"){KeyValue("Type",r.type);r.language?.let{KeyValue("Language",it)};KeyValue("Payload",r.value);KeyValue("Raw",r.rawHex)}}}
-private fun LazyListScope.raw(t:TagSnapshot){item{Expand("Raw Data"){KeyValue("UID",t.uid?:"Unavailable through Android NFC API");KeyValue("NDEF bytes",t.rawNdef?.let{NdefCodec.run{it.hex()}}?:"Unavailable through Android NFC API");KeyValue("Memory / TLV", "Unavailable unless tag exposes it via a supported public API")}}}
-private fun LazyListScope.security(t:TagSnapshot){item{Expand("Security & Protection Analysis",true){KeyValue("Protection",t.protection.label);KeyValue("Explanation",t.protectionReason);KeyValue("Password / authentication", "No authentication attempted. Android does not provide a universal way to determine this.");KeyValue("Encryption", "Unknown — absence of readable NDEF is not evidence of encryption.")}}}
-private fun LazyListScope.technologies(t:TagSnapshot){items(t.technologies.size){i->val tech=t.technologies[i];Expand(tech.name){tech.values.forEach{KeyValue(it.first,it.second)}}}}
+@Composable
+private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSettings: () -> Unit) {
+    val state by viewModel.state.collectAsState()
+    val history by viewModel.history.collectAsState()
+    var showWriter by remember { mutableStateOf(false) }
 
-@Composable private fun WriteScreen(vm:NfcViewModel,state:ScanState,back:()->Unit){var kind by remember{mutableStateOf("Text")};var value by remember{mutableStateOf("")};var language by remember{mutableStateOf("en")};var type by remember{mutableStateOf("text/plain")};var confirm by remember{mutableStateOf(false)};var composeError by remember{mutableStateOf<String?>(null)}; Scaffold(topBar={TopAppBar(title={Text("Write NDEF")},navigationIcon={IconButton(back){Icon(Icons.Default.ArrowBack,"Back")}})}){p->LazyColumn(Modifier.padding(p).fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(14.dp)){item{InfoCard("Safe write","The tag must remain in range. Existing NDEF data may be replaced; no write occurs until you confirm.")};item{SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()){listOf("Text","URI","MIME","External","Raw").forEachIndexed{i,k->SegmentedButton(kind==k,{kind=k},SegmentedButtonDefaults.itemShape(i,5)){Text(k)}}};item{OutlinedTextField(value,{value=it;composeError=null},Modifier.fillMaxWidth(),label={Text(if(kind=="Raw")"NDEF record payload hex" else "Content")},minLines=3)};if(kind=="Text")item{OutlinedTextField(language,{language=it},Modifier.fillMaxWidth(),label={Text("Language")})};if(kind=="MIME"||kind=="External")item{OutlinedTextField(type,{type=it},Modifier.fillMaxWidth(),label={Text(if(kind=="MIME")"MIME type" else "External type (domain:type)")})};composeError?.let{item{InfoCard("Message validation",it)}};item{Button({confirm=true},Modifier.fillMaxWidth(),enabled=value.isNotBlank()&&state !is ScanState.Writing){Text("Write to Tag")}}; if(state is ScanState.WriteSuccess)item{InfoCard("Write complete",state.message)};if(state is ScanState.Error)item{ErrorCard(state.error)}};if(confirm)AlertDialog({confirm=false},{Text("Write data to NFC tag?")},{Text("This will write one $kind NDEF record and may replace existing NDEF data. Keep the tag against the phone until completion.")},{TextButton({confirm=false}){Text("Cancel")};Button({confirm=false;runCatching{when(kind){"Text"->NdefCodec.text(value,language);"URI"->NdefCodec.uri(value);"MIME"->NdefCodec.mime(type,value);"External"->NdefCodec.external(type,value);else->NdefCodec.raw(value)}}.onSuccess{vm.write(listOf(it))}.onFailure{composeError=it.message ?: "Invalid NDEF record."}}){Text("Write")}}}
-@Composable private fun History(items:List<HistoryItem>,vm:NfcViewModel)=LazyColumn(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){item{Text("Scan History",style=MaterialTheme.typography.headlineSmall)};item{Text("Stores scan metadata only. NFC payloads are never saved by default.")};if(items.isEmpty())item{InfoCard("No scans yet","Completed tag scans appear here.")};items(items.size){i->val h=items[i];Card(Modifier.fillMaxWidth()){Row(Modifier.padding(14.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(h.uid?:"UID unavailable",fontWeight=FontWeight.Bold);Text("${h.technologies} · ${h.records} record(s) · ${h.protection.label}",style=MaterialTheme.typography.bodySmall)};IconButton({vm.deleteHistory(h.id)}){Icon(Icons.Default.Delete,"Delete history item")}}}}}
-@Composable private fun Settings(vm:NfcViewModel){var payload by remember{mutableStateOf(vm.savePayloads)};var logs by remember{mutableStateOf(vm.detailedLogging)};LazyColumn(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{Text("Settings",style=MaterialTheme.typography.headlineSmall)};item{Card(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Privacy",fontWeight=FontWeight.Bold);Text("NFC data is processed locally. No account or server is used. History is local and stores metadata only.");Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("Save NFC payloads to history",Modifier.weight(1f));Switch(payload,{payload=it;vm.savePayloads=it})};Text("Payload storage is intentionally not implemented in this release; this remains safely off by default.",style=MaterialTheme.typography.bodySmall)}}};item{Card(Modifier.fillMaxWidth()){Row(Modifier.padding(14.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("Enable detailed NFC logging",fontWeight=FontWeight.Bold);Text("Logs operation metadata, technologies, and failures. Payloads are never logged.",style=MaterialTheme.typography.bodySmall)};Switch(logs,{logs=it;vm.detailedLogging=it})}}};item{InfoCard("Android limitations","The app can only show interfaces and bytes Android exposes. It cannot access protected credentials, secure elements, payment cards, or encrypted memory without an authorized public interface.")}}
-@Composable private fun StatusSummary(t:TagSnapshot)=Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(7.dp)){Text("Tag detected",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);KeyValue("Technology",t.technologies.joinToString { it.name });KeyValue("Tag ID",t.uid?:"Unavailable through Android API");KeyValue("NDEF",if(t.ndefSupported)"Supported" else "Not exposed");KeyValue("Writable",t.writable?.let{if(it)"Yes" else "No"}?:"Unknown");KeyValue("Protection",t.protection.label)}}
-@Composable private fun Expand(title:String,open:Boolean=false,content:@Composable ColumnScope.()->Unit){var expanded by remember{mutableStateOf(open)};Card(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Row(Modifier.fillMaxWidth().clickable{expanded=!expanded},verticalAlignment=Alignment.CenterVertically){Text(title,Modifier.weight(1f),fontWeight=FontWeight.Bold);Icon(if(expanded)Icons.Default.ExpandLess else Icons.Default.ExpandMore,null)};if(expanded){Spacer(Modifier.height(8.dp));content()}}}}
-@Composable private fun KeyValue(key:String,value:String)=Column(Modifier.padding(vertical=3.dp)){Text(key,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary);Text(value,style=MaterialTheme.typography.bodyMedium)}
-@Composable private fun InfoCard(title:String,text:String)=Card(Modifier.fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.secondaryContainer)){Column(Modifier.padding(14.dp)){Text(title,fontWeight=FontWeight.Bold);Text(text)}}
-@Composable private fun ErrorCard(e:NfcFailure)=Card(Modifier.fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)){Column(Modifier.padding(14.dp)){Text(e.message,fontWeight=FontWeight.Bold);Text(e.action);Expand("Technical details"){KeyValue("Reason",e.technical)}}}
+    Scaffold(topBar = { TopAppBar(title = { Text("NFC Tool") }) }) { padding ->
+        when (val current = state) {
+            is ScanState.Success -> TagDetails(current.tag, viewModel::reset) { showWriter = true }
+            else -> ScanHome(Modifier.padding(padding), viewModel, current, history, activity, openSettings)
+        }
+    }
+
+    if (showWriter) {
+        WriteDialog(onDismiss = { showWriter = false }) { record -> viewModel.write(listOf(record)) }
+    }
+}
+
+@Composable
+private fun ScanHome(
+    modifier: Modifier,
+    viewModel: NfcViewModel,
+    state: ScanState,
+    history: List<HistoryItem>,
+    activity: MainActivity,
+    openSettings: () -> Unit
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { Text("NFC diagnostics", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            InfoCard("NFC status") {
+                Text(when {
+                    !viewModel.supported() -> "This device does not support NFC."
+                    !viewModel.enabled() -> "NFC is disabled."
+                    state is ScanState.Scanning -> "Waiting for an NFC tag…"
+                    state is ScanState.Reading -> "Reading NFC tag…"
+                    else -> "NFC is ready."
+                })
+            }
+        }
+        if (!viewModel.enabled()) item { TextButton(onClick = openSettings) { Text("Open NFC settings") } }
+        item {
+            Button(
+                onClick = { viewModel.scan(activity) },
+                enabled = viewModel.supported() && viewModel.enabled() && state !is ScanState.Reading,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Scan NFC tag") }
+        }
+        if (state is ScanState.Error) item { FailureCard(state.error) }
+        item { Text("Recent scans", style = MaterialTheme.typography.titleLarge) }
+        if (history.isEmpty()) item { Text("No completed scans yet.") }
+        else items(history, key = { it.id }) { entry ->
+            InfoCard(entry.uid ?: "UID unavailable") {
+                Text("${entry.technologies} · ${entry.records} record(s)")
+                Text("Protection: ${entry.protection.label}")
+                TextButton(onClick = { viewModel.deleteHistory(entry.id) }) { Text("Delete") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TagDetails(tag: TagSnapshot, onBack: () -> Unit, onWrite: () -> Unit) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            TextButton(onClick = onBack) { Text("Back to scanner") }
+            Text("Tag details", style = MaterialTheme.typography.headlineSmall)
+        }
+        item {
+            InfoCard("Overview") {
+                Detail("UID", tag.uid ?: "Unavailable through Android API")
+                Detail("NDEF", if (tag.ndefSupported) "Supported" else "Not exposed")
+                Detail("Writable", tag.writable?.let { if (it) "Yes" else "No" } ?: "Unknown")
+                Detail("Protection", tag.protection.label)
+            }
+        }
+        item { Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write NDEF record") } }
+        item { Text("NDEF records", style = MaterialTheme.typography.titleLarge) }
+        if (tag.ndefRecords.isEmpty()) item { Text("No readable NDEF records are exposed by this tag.") }
+        else items(tag.ndefRecords, key = { it.rawHex }) { record ->
+            InfoCard(record.kind) {
+                Detail("Type", record.type)
+                record.language?.let { Detail("Language", it) }
+                Detail("Payload", record.value)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WriteDialog(onDismiss: () -> Unit, onWrite: (android.nfc.NdefRecord) -> Unit) {
+    var value by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Write text record") },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                label = { Text("Text") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3
+            )
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            Button(
+                onClick = { onWrite(NdefCodec.text(value, "en")); onDismiss() },
+                enabled = value.isNotBlank()
+            ) { Text("Write") }
+        }
+    )
+}
+
+@Composable
+private fun InfoCard(title: String, content: @Composable () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun Detail(label: String, value: String) {
+    Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
+}
+
+@Composable
+private fun FailureCard(error: NfcFailure) {
+    InfoCard(error.message) {
+        Text(error.action)
+        Text(error.technical, style = MaterialTheme.typography.bodySmall)
+    }
+}

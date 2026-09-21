@@ -16,7 +16,13 @@ object NdefCodec {
     fun text(value:String, language:String)=NdefRecord.createTextRecord(language,value)
     fun uri(value:String)=NdefRecord.createUri(value)
     fun mime(type:String,value:String)=NdefRecord.createMime(type,value.toByteArray())
-    fun external(type:String,value:String)=NdefRecord.createExternal(type,value.toByteArray())
+    fun external(type:String,value:String): NdefRecord {
+        val parts = type.split(':', limit = 2)
+        require(parts.size == 2 && parts.all { it.isNotBlank() }) {
+            "External type must use the format domain:type"
+        }
+        return NdefRecord.createExternal(parts[0], parts[1], value.toByteArray())
+    }
     fun raw(hex:String):NdefRecord { val clean=hex.replace(Regex("[^0-9A-Fa-f]"),""); require(clean.length%2==0){"Raw data must contain full hexadecimal bytes"}; return NdefRecord(NdefRecord.TNF_UNKNOWN,ByteArray(0),ByteArray(0),ByteArray(clean.length/2){clean.substring(it*2,it*2+2).toInt(16).toByte()}) }
     private fun decodeUri(b:ByteArray):String { if(b.isEmpty()) return ""; val p=arrayOf("","http://www.","https://www.","http://","https://","tel:","mailto:","ftp://anonymous:anonymous@","ftp://ftp.","ftps://","sftp://","smb://","nfs://","ftp://","dav://","news:","telnet://","imap:","rtsp://","urn:","pop:","sip:","sips:","tftp:","btspp://","btl2cap://","btgoep://","tcpobex://","irdaobex://","file://","urn:epc:id:","urn:epc:tag:","urn:epc:pat:","urn:epc:raw:","urn:epc:","urn:nfc:"); return p.getOrElse(b[0].toInt() and 255){""}+b.drop(1).toByteArray().toString(Charsets.UTF_8) }
     private fun ByteArray.safeText()=runCatching{toString(Charsets.UTF_8)}.getOrElse{hex()}
