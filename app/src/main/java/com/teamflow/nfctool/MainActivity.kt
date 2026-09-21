@@ -3,6 +3,7 @@
 package com.teamflow.nfctool
 
 import android.content.Intent
+import android.nfc.NdefRecord
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
@@ -16,10 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.teamflow.nfctool.domain.HistoryItem
-import com.teamflow.nfctool.domain.NfcFailure
-import com.teamflow.nfctool.domain.ScanState
-import com.teamflow.nfctool.domain.TagSnapshot
+import com.teamflow.nfctool.domain.*
 import com.teamflow.nfctool.nfc.NdefCodec
 import com.teamflow.nfctool.presentation.NfcViewModel
 import com.teamflow.nfctool.presentation.NfcViewModelFactory
@@ -29,196 +27,241 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                NfcToolApp(viewModel, this) {
-                    startActivity(Intent(AndroidSettings.ACTION_NFC_SETTINGS))
-                }
-            }
-        }
+        setContent { MaterialTheme { NfcToolApp(viewModel, this) { startActivity(Intent(AndroidSettings.ACTION_NFC_SETTINGS)) } } }
     }
 
-    override fun onPause() {
-        super.onPause()
-        viewModel.stop(this)
-    }
+    override fun onPause() { super.onPause(); viewModel.stop(this) }
+
+    override fun onResume() { super.onResume(); viewModel.resume(this) }
 }
 
 @Composable
 private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSettings: () -> Unit) {
     val state by viewModel.state.collectAsState()
     val history by viewModel.history.collectAsState()
-    var showWriter by remember { mutableStateOf(false) }
+    var writerFor by remember { mutableStateOf<TagSnapshot?>(null) }
+    var confirmFormat by remember { mutableStateOf(false) }
 
-    Scaffold(topBar = {
-        TopAppBar(title = {
-            Column {
-                Text("NFC Tool")
-                Text("Safe local reader", style = MaterialTheme.typography.labelSmall)
-            }
-        })
-    }) { padding ->
+    Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = { TopAppBar(title = { Column { Text("NFC Tool"); Text("Reader, analyzer & NDEF writer", style = MaterialTheme.typography.labelSmall) } }) }
+    ) { padding ->
+        val contentModifier = Modifier.padding(padding).consumeWindowInsets(padding)
         when (val current = state) {
-            is ScanState.Success -> TagDetails(current.tag, viewModel::reset) { showWriter = true }
-            else -> ScanHome(Modifier.padding(padding), viewModel, current, history, activity, openSettings)
+            is ScanState.Success -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true })
+            is ScanState.Partial -> ResultScreen(contentModifier, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true })
+            else -> HomeScreen(contentModifier, viewModel, current, history, activity, openSettings)
         }
     }
-
-    if (showWriter) {
-        WriteDialog(onDismiss = { showWriter = false }) { record -> viewModel.write(listOf(record)) }
+    writerFor?.let { tag -> WriteDialog(tag, onDismiss = { writerFor = null }, onWrite = { records -> writerFor = null; viewModel.write(records) }) }
+    if (confirmFormat) {
+        AlertDialog(
+            onDismissRequest = { confirmFormat = false },
+            title = { Text("Format this NFC tag as NDEF?") },
+            text = { Text("Formatting may overwrite existing tag contents. Keep the same tag against the phone until the operation completes.") },
+            dismissButton = { TextButton(onClick = { confirmFormat = false }) { Text("Cancel") } },
+            confirmButton = { Button(onClick = { confirmFormat = false; viewModel.formatAsNdef() }) { Text("Format") } }
+        )
     }
 }
 
 @Composable
-private fun ScanHome(
-    modifier: Modifier,
-    viewModel: NfcViewModel,
-    state: ScanState,
-    history: List<HistoryItem>,
-    activity: MainActivity,
-    openSettings: () -> Unit
-) {
-    LazyColumn(
-        modifier = modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, history: List<HistoryItem>, activity: MainActivity, openSettings: () -> Unit) {
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-            ) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Ready to scan", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("Tap Scan, then hold a 13.56 MHz NFC card near the phone. The app reports detection even when protected card data is unavailable.")
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Advanced NFC Reader & Writer", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Read only the technologies and data Android legitimately exposes. Protected credentials are never bypassed.")
                 }
             }
         }
-        item {
-            InfoCard("NFC status") {
-                Text(when {
-                    !viewModel.supported() -> "This device does not support NFC."
-                    !viewModel.enabled() -> "NFC is disabled."
-                    state is ScanState.Scanning -> "Waiting for an NFC tag…"
-                    state is ScanState.Reading -> "Reading NFC tag…"
-                    else -> "NFC is ready."
-                })
-            }
-        }
-        if (!viewModel.enabled()) item { TextButton(onClick = openSettings) { Text("Open NFC settings") } }
-        item {
-            Button(
-                onClick = { viewModel.scan(activity) },
-                enabled = viewModel.supported() && viewModel.enabled() && state !is ScanState.Reading,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Scan NFC tag") }
-        }
-        if (state is ScanState.Error) item { FailureCard(state.error) }
-        item { Text("Recent scans", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-        if (history.isEmpty()) item { Text("No completed scans yet.") }
+        item { ScanPanel(vm, state, activity, openSettings) }
+        if (state is ScanState.Error) item { FailureCard(state.error, { vm.scan(activity) }) }
+        item { Text("Scan history", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        if (history.isEmpty()) item { Text("No completed scans yet. NFC payloads are not saved to history.") }
         else items(history, key = { it.id }) { entry ->
             InfoCard(entry.uid ?: "UID unavailable") {
-                Text("${entry.technologies} · ${entry.records} record(s)")
-                Text("Protection: ${entry.protection.label}")
-                TextButton(onClick = { viewModel.deleteHistory(entry.id) }) { Text("Delete") }
+                Text("${entry.technologies} · ${entry.records} NDEF record(s)")
+                Text("Write access: ${entry.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown"}")
+                TextButton(onClick = { vm.deleteHistory(entry.id) }) { Text("Remove") }
             }
         }
     }
 }
 
 @Composable
-private fun TagDetails(tag: TagSnapshot, onBack: () -> Unit, onWrite: () -> Unit) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            TextButton(onClick = onBack) { Text("Back to scanner") }
-            Text("Card detected", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("Android detected this NFC card. Only data exposed through public Android APIs is shown.")
-        }
-        if (!tag.ndefSupported || tag.ndefRecords.isEmpty()) item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Card data is not exposed", fontWeight = FontWeight.Bold)
-                    Text("This card was detected, but it does not expose readable NDEF data to Android. It may use a protected, proprietary, or unsupported access-card format.")
-                    Text(tag.protectionReason, style = MaterialTheme.typography.bodySmall)
-                }
+private fun ScanPanel(vm: NfcViewModel, state: ScanState, activity: MainActivity, openSettings: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val status = when (state) {
+                ScanState.Scanning -> "Scanning for an NFC tag…"
+                is ScanState.TagDetected -> "Tag detected. Reading capabilities…"
+                is ScanState.Reading -> "Reading tag information…"
+                is ScanState.Writing -> "Writing NDEF data. Keep the tag in place…"
+                is ScanState.Formatting -> "Formatting NDEF. Keep the tag in place…"
+                else -> if (vm.enabled()) "NFC is enabled" else "NFC is disabled"
             }
-        }
-        item {
-            InfoCard("Overview") {
-                Detail("UID", tag.uid ?: "Unavailable through Android API")
-                Detail("NDEF", if (tag.ndefSupported) "Supported" else "Not exposed")
-                Detail("Writable", tag.writable?.let { if (it) "Yes" else "No" } ?: "Unknown")
-                Detail("Protection", tag.protection.label)
-            }
-        }
-        if (tag.ndefSupported && tag.writable == true) item {
-            Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write NDEF record") }
-        }
-        item { Text("NDEF records", style = MaterialTheme.typography.titleLarge) }
-        if (tag.ndefRecords.isEmpty()) item { Text("No readable NDEF records are exposed by this card.") }
-        else items(tag.ndefRecords, key = { it.rawHex }) { record ->
-            InfoCard(record.kind) {
-                Detail("Type", record.type)
-                record.language?.let { Detail("Language", it) }
-                Detail("Payload", record.value)
-            }
+            Text("Ready to scan", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(status)
+            if (!vm.supported()) Text("This device does not support NFC.")
+            if (!vm.enabled()) TextButton(onClick = openSettings) { Text("Open NFC settings") }
+            Button(
+                onClick = { vm.scan(activity) },
+                enabled = vm.supported() && vm.enabled() && state !is ScanState.Reading && state !is ScanState.Writing && state !is ScanState.Formatting,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (state is ScanState.Scanning) "Re-scan" else "Start scanning") }
         }
     }
 }
 
 @Composable
-private fun WriteDialog(onDismiss: () -> Unit, onWrite: (android.nfc.NdefRecord) -> Unit) {
+private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel, activity: MainActivity, onWrite: () -> Unit, onFormat: () -> Unit) {
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
+        item {
+            Text("NFC Tag Details", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("✓ Tag detected", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            Text("Only information exposed through public Android NFC APIs is shown.")
+        }
+        item {
+            Button(onClick = { vm.scan(activity) }, modifier = Modifier.fillMaxWidth()) { Text("Scan Another Tag") }
+            TextButton(onClick = { vm.refreshTagCapabilities() }, modifier = Modifier.fillMaxWidth()) { Text("Re-scan current tag information") }
+        }
+        item { OverviewCard(tag) }
+        item { NdefStatusCard(tag, onFormat) }
+        item { CapabilityMatrix(tag) }
+        item { Text("NDEF data", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        if (tag.ndefRecords.isEmpty()) item { NdefDiagnosisCard(tag) }
+        else items(tag.ndefRecords, key = { it.rawHex }) { record -> NdefRecordCard(record) }
+        item { WriteActions(tag, onWrite, onFormat) }
+        item { TechnologiesCard(tag) }
+        item { SecurityCard(tag) }
+        item { TechnicalDetailsCard(tag) }
+    }
+}
+
+@Composable
+private fun OverviewCard(tag: TagSnapshot) = InfoCard("Tag overview") {
+    Detail("UID", tag.uid ?: unavailable())
+    Detail("NDEF", tag.ndefAvailability.label)
+    Detail("Write access", tag.writable?.let { if (it) "Writable" else "Read-only" } ?: if (tag.formatable) "Available after NDEF formatting" else "Unknown")
+    Detail("Protection", tag.protection.label)
+}
+
+@Composable
+private fun NdefStatusCard(tag: TagSnapshot, onFormat: () -> Unit) = InfoCard("NDEF status") {
+    Detail("Status", tag.ndefAvailability.label)
+    Detail("Formatable", if (tag.formatable) "Yes" else "No")
+    Detail("Capacity", tag.maxSize?.let { "$it bytes" } ?: unavailable())
+    Detail("Current size", tag.ndefSize?.let { "$it bytes" } ?: unavailable())
+    Detail("Records", tag.ndefRecords.size.toString())
+    Text(tag.ndefDiagnosis, style = MaterialTheme.typography.bodySmall)
+    if (tag.formatable && tag.ndefAvailability == NdefAvailability.FORMATABLE) TextButton(onClick = onFormat) { Text("Format as NDEF") }
+}
+
+@Composable
+private fun NdefDiagnosisCard(tag: TagSnapshot) = Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("No readable NDEF records", fontWeight = FontWeight.Bold)
+        Text(tag.ndefDiagnosis)
+        Text("This does not mean the card has no data. It may use another technology, require authentication, or expose no public Android memory interface.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun CapabilityMatrix(tag: TagSnapshot) = InfoCard("Capability matrix") {
+    Capability("Tag detected", true, "Android delivered this tag to the app.")
+    Capability("UID available", tag.uid != null, "Some Android devices do not expose a stable tag ID.")
+    Capability("NDEF", tag.ndefAvailability == NdefAvailability.AVAILABLE || tag.ndefAvailability == NdefAvailability.EMPTY, tag.ndefDiagnosis)
+    Capability("NDEF formatting", tag.formatable, "Shown only when Android exposes NdefFormatable.")
+    Capability("NDEF writing", tag.writable == true, if (tag.formatable) "Available after successful formatting." else "Requires an Android-exposed writable NDEF interface.")
+    tag.technologies.forEach { Capability(it.name, true, "Detected by Android.") }
+}
+
+@Composable
+private fun Capability(name: String, available: Boolean, explanation: String) {
+    Text("${if (available) "✓" else "✕"} $name: ${if (available) "Available" else "Not available"}", fontWeight = FontWeight.Medium)
+    Text(explanation, style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun NdefRecordCard(record: NdefRecordInfo) = InfoCard("${record.kind} record") {
+    Detail("Type", record.type)
+    record.language?.let { Detail("Language", it) }
+    Detail("Payload", record.value)
+    Detail("Raw payload", record.rawHex)
+}
+
+@Composable
+private fun WriteActions(tag: TagSnapshot, onWrite: () -> Unit, onFormat: () -> Unit) = InfoCard("Actions") {
+    when {
+        tag.writable == true -> Button(onClick = onWrite, modifier = Modifier.fillMaxWidth()) { Text("Write to tag") }
+        tag.formatable && tag.ndefAvailability == NdefAvailability.FORMATABLE -> Button(onClick = onFormat, modifier = Modifier.fillMaxWidth()) { Text("Format as NDEF") }
+        else -> Text("Writing unavailable: ${if (tag.writable == false) "the exposed NDEF interface is read-only." else "no writable NDEF interface is currently exposed."}")
+    }
+}
+
+@Composable
+private fun TechnologiesCard(tag: TagSnapshot) = InfoCard("Detected technologies") {
+    if (tag.technologies.isEmpty()) Text(unavailable())
+    tag.technologies.forEach { tech ->
+        Text("✓ ${tech.name}", fontWeight = FontWeight.Bold)
+        tech.values.forEach { Detail(it.first, it.second) }
+    }
+}
+
+@Composable
+private fun SecurityCard(tag: TagSnapshot) = InfoCard("Security & protection") {
+    Detail("Protection", tag.protection.label)
+    Detail("Authentication", "Unknown — not tested")
+    Detail("Encryption", "Unknown — not inferred")
+    Detail("Write access", tag.writable?.let { if (it) "Writable NDEF interface" else "Read-only NDEF interface" } ?: "Unknown")
+    Text(tag.protectionReason, style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun TechnicalDetailsCard(tag: TagSnapshot) = InfoCard("Technical details") {
+    Detail("Tag ID", tag.uid ?: unavailable())
+    Detail("Raw NDEF", tag.rawNdef?.joinToString(" ") { "%02X".format(it) } ?: unavailable())
+    Text("Raw data is displayed read-only. This app does not authenticate, brute-force, or access protected credentials.", style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun WriteDialog(tag: TagSnapshot, onDismiss: () -> Unit, onWrite: (List<NdefRecord>) -> Unit) {
+    var type by remember { mutableStateOf("Text") }
     var value by remember { mutableStateOf("") }
+    var metadata by remember { mutableStateOf("en") }
+    var confirm by remember { mutableStateOf(false) }
+    val record = remember(type, value, metadata) { runCatching { when (type) { "Text" -> NdefCodec.text(value, metadata); "URL" -> NdefCodec.uri(value); "MIME" -> NdefCodec.mime(metadata, value); "External" -> NdefCodec.external(metadata, value); else -> NdefCodec.raw(value) } }.getOrNull() }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Write text record") },
+        title = { Text("Write NDEF") },
         text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                label = { Text("Text") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 3
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { listOf("Text", "URL", "MIME", "External", "Raw").forEach { choice -> FilterChip(selected = type == choice, onClick = { type = choice }, label = { Text(choice) }) } }
+                OutlinedTextField(value, { value = it }, label = { Text(if (type == "Raw") "Hex payload" else "Content") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                if (type == "Text" || type == "MIME" || type == "External") OutlinedTextField(metadata, { metadata = it }, label = { Text(if (type == "Text") "Language" else if (type == "MIME") "MIME type" else "domain:type") }, modifier = Modifier.fillMaxWidth())
+                Detail("Capacity", tag.maxSize?.let { "$it bytes" } ?: unavailable())
+                Text("Preview: one $type record", style = MaterialTheme.typography.bodySmall)
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        confirmButton = {
-            Button(
-                onClick = { onWrite(NdefCodec.text(value, "en")); onDismiss() },
-                enabled = value.isNotBlank()
-            ) { Text("Write") }
-        }
+        confirmButton = { Button(onClick = { confirm = true }, enabled = value.isNotBlank() && record != null) { Text("Continue") } }
+    )
+    if (confirm && record != null) AlertDialog(
+        onDismissRequest = { confirm = false },
+        title = { Text("Write preview") },
+        text = { Text("This will replace the current NDEF message with one $type record. Keep the tag against the phone until writing finishes.") },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
+        confirmButton = { Button(onClick = { onWrite(listOf(record)); confirm = false }) { Text("Hold tag & write") } }
     )
 }
 
 @Composable
-private fun InfoCard(title: String, content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(title, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            content()
-        }
-    }
+private fun InfoCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) { Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium); content() } }
 }
 
-@Composable
-private fun Detail(label: String, value: String) {
-    Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
-}
-
-@Composable
-private fun FailureCard(error: NfcFailure) {
-    InfoCard(error.message) {
-        Text(error.action)
-        Text(error.technical, style = MaterialTheme.typography.bodySmall)
-    }
-}
+@Composable private fun Detail(label: String, value: String) { Text("$label: $value", style = MaterialTheme.typography.bodyMedium) }
+@Composable private fun FailureCard(error: NfcFailure, retry: () -> Unit) = Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { Text(error.message, fontWeight = FontWeight.Bold); Text(error.action); Text(error.technical, style = MaterialTheme.typography.bodySmall); Button(onClick = retry) { Text("Try again") } } }
+private fun unavailable() = "Unavailable through Android API"

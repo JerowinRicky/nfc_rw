@@ -12,4 +12,5 @@ interface NfcRepository {
     fun stopScanning(activity: Activity)
     suspend fun readTag(tag: Tag): Result<TagSnapshot>
     suspend fun writeNdef(tag: Tag, message: NdefMessage): Result<Unit>
+    suspend fun formatNdef(tag: Tag, initialMessage: NdefMessage): Result<Unit>
 }
