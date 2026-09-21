@@ -9,11 +9,10 @@ import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -402,7 +401,10 @@ private fun MultiFormatCloneScreen(
 ) {
     var editing by remember { mutableStateOf<EditableNdefRecord?>(null) }
     val built = remember(edited) { runCatching { edited.map(NdefCodec::build) } }
-    val messageSize = built.getOrNull()?.let { android.nfc.NdefMessage(it.toTypedArray()).toByteArray().size }
+    val messageSize = built.getOrNull()?.let { records ->
+        if (records.isEmpty()) 0
+        else runCatching { android.nfc.NdefMessage(records.toTypedArray()).toByteArray().size }.getOrNull()
+    }
 
     LazyColumn(
         modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -608,8 +610,6 @@ private fun SourceTagCard(tag: TagSnapshot?, isScanning: Boolean, onScan: () -> 
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.Nfc, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
                         Text("Scan Source Tag")
                     }
                 }
@@ -822,8 +822,6 @@ private fun DestinationTagCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Button(onClick = onScan, modifier = Modifier.fillMaxWidth(), enabled = canScan) {
-                    Icon(Icons.Default.Nfc, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
                     Text("Scan Destination Tag")
                 }
                 return@Column
@@ -981,7 +979,10 @@ private fun EditNdefRecordDialog(record: EditableNdefRecord, onDismiss: () -> Un
         title = { Text("Edit NDEF record") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     listOf("Text", "URI", "MIME", "External type", "Smart Poster").forEach { choice ->
                         FilterChip(selected = kind == choice, onClick = { kind = choice }, label = { Text(choice) })
                     }
