@@ -3,6 +3,7 @@ package com.teamflow.nfctool.nfc
 import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import com.teamflow.nfctool.domain.NdefRecordInfo
+import com.teamflow.nfctool.domain.EditableNdefRecord
 
 object NdefCodec {
     fun parse(message: NdefMessage) = message.records.map(::parseRecord)
@@ -24,6 +25,24 @@ object NdefCodec {
         return NdefRecord.createExternal(parts[0], parts[1], value.toByteArray())
     }
     fun raw(hex:String):NdefRecord { val clean=hex.replace(Regex("[^0-9A-Fa-f]"),""); require(clean.length%2==0){"Raw data must contain full hexadecimal bytes"}; return NdefRecord(NdefRecord.TNF_UNKNOWN,ByteArray(0),ByteArray(0),ByteArray(clean.length/2){clean.substring(it*2,it*2+2).toInt(16).toByte()}) }
+    fun smartPoster(uri: String, title: String): NdefRecord {
+        val nested = buildList { add(NdefRecord.createUri(uri)); if (title.isNotBlank()) add(NdefRecord.createTextRecord("en", title)) }
+        return NdefRecord(NdefRecord.TNF_WELL_KNOWN, NdefRecord.RTD_SMART_POSTER, ByteArray(0), NdefMessage(nested.toTypedArray()).toByteArray())
+    }
+    fun editable(info: NdefRecordInfo, id: Long) = EditableNdefRecord(id, info.kind, info.type, info.value, info.language.orEmpty(), info.rawHex)
+    fun build(record: EditableNdefRecord): NdefRecord = when (record.kind) {
+        "Text" -> text(record.value, record.metadata.ifBlank { "en" })
+        "URI" -> uri(record.value)
+        "MIME" -> mime(record.type, record.value)
+        "External type" -> external(record.type, record.value)
+        "Smart Poster" -> smartPoster(record.value, record.metadata)
+        else -> rawRecord(record.rawHex)
+    }
+    private fun rawRecord(hex: String): NdefRecord {
+        val clean=hex.replace(Regex("[^0-9A-Fa-f]"),"")
+        require(clean.length % 2 == 0 && clean.isNotEmpty()) { "This record cannot be edited because Android did not expose a reproducible raw record." }
+        return NdefRecord(ByteArray(clean.length / 2) { clean.substring(it * 2, it * 2 + 2).toInt(16).toByte() })
+    }
     private fun decodeUri(b:ByteArray):String { if(b.isEmpty()) return ""; val p=arrayOf("","http://www.","https://www.","http://","https://","tel:","mailto:","ftp://anonymous:anonymous@","ftp://ftp.","ftps://","sftp://","smb://","nfs://","ftp://","dav://","news:","telnet://","imap:","rtsp://","urn:","pop:","sip:","sips:","tftp:","btspp://","btl2cap://","btgoep://","tcpobex://","irdaobex://","file://","urn:epc:id:","urn:epc:tag:","urn:epc:pat:","urn:epc:raw:","urn:epc:","urn:nfc:"); return p.getOrElse(b[0].toInt() and 255){""}+b.drop(1).toByteArray().toString(Charsets.UTF_8) }
     private fun ByteArray.safeText()=runCatching{toString(Charsets.UTF_8)}.getOrElse{hex()}
     fun ByteArray.hex()=joinToString(" "){"%02X".format(it)}

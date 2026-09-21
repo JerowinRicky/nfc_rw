@@ -78,3 +78,13 @@ data class NdefProfile(
     val recordCount: Int,
     val messageBase64: String
 )
+
+/** A user-editable representation of an NDEF record exposed by Android. */
+data class EditableNdefRecord(
+    val id: Long,
+    val kind: String,
+    val type: String,
+    val value: String,
+    val metadata: String = "",
+    val rawHex: String = ""
+)
