@@ -39,7 +39,9 @@ class AndroidNfcRepository(context: Context) : NfcRepository {
         )
     }
 
-    override fun stopScanning(activity: Activity) = adapter?.disableReaderMode(activity)
+    override fun stopScanning(activity: Activity) {
+        adapter?.disableReaderMode(activity)
+    }
 
     override suspend fun readTag(tag: Tag): Result<TagSnapshot> = withContext(Dispatchers.IO) {
         runCatching {
