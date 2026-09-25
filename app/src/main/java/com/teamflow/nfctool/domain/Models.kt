@@ -133,3 +133,14 @@ data class EditableNdefRecord(
     val metadata: String = "",
     val rawHex: String = ""
 )
+
+enum class MultiCloneStage {
+    IDLE,
+    SOURCE_SCANNING,
+    SOURCE_READY,
+    DEST_SCANNING,
+    DEST_READY,
+    WRITING,
+    SUCCESS,
+    VERIFY_FAILED
+}
