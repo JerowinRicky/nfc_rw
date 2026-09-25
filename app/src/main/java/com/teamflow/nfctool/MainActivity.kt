@@ -9,17 +9,27 @@ import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.teamflow.nfctool.domain.*
 import com.teamflow.nfctool.nfc.NdefCodec
@@ -32,7 +42,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.handleIntent(intent)
-        setContent { MaterialTheme { NfcToolApp(viewModel, this) { startActivity(Intent(AndroidSettings.ACTION_NFC_SETTINGS)) } } }
+        setContent {
+            MaterialTheme(
+                colorScheme = darkColorScheme()
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    NfcToolApp(viewModel, this) { startActivity(Intent(AndroidSettings.ACTION_NFC_SETTINGS)) }
+                }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -47,16 +68,21 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSettings: () -> Unit) {
+    val selectedTab by viewModel.selectedTab.collectAsState()
     val state by viewModel.state.collectAsState()
     val history by viewModel.history.collectAsState()
     val profiles by viewModel.profiles.collectAsState()
     val selectedProfile by viewModel.selectedProfile.collectAsState()
+    val aiConfig by viewModel.aiConfig.collectAsState()
+    val chatMessages by viewModel.chatMessages.collectAsState()
+    val chatInput by viewModel.chatInput.collectAsState()
+    val isChatLoading by viewModel.isChatLoading.collectAsState()
+
     var writerFor by remember { mutableStateOf<TagSnapshot?>(null) }
     var confirmFormat by remember { mutableStateOf(false) }
-    var showHistory by remember { mutableStateOf(false) }
-    var showProfiles by remember { mutableStateOf(false) }
     var profileToSave by remember { mutableStateOf<TagSnapshot?>(null) }
     var showClone by remember { mutableStateOf(false) }
+
     var multiCloneStage by remember { mutableStateOf(MultiCloneStage.IDLE) }
     var cloneSource by remember { mutableStateOf<TagSnapshot?>(null) }
     var cloneOriginal by remember { mutableStateOf<List<EditableNdefRecord>>(emptyList()) }
@@ -98,23 +124,138 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = { TopAppBar(title = { Column { Text("NFC Tool"); Text("Reader, analyzer & NDEF writer", style = MaterialTheme.typography.labelSmall) } }) }
-    ) { padding ->
-        val cm = Modifier.padding(padding).consumeWindowInsets(padding)
-        val onScanSource: () -> Unit = { multiCloneStage = MultiCloneStage.SOURCE_SCANNING; viewModel.scan(activity) }
-        val onScanDest: () -> Unit  = { multiCloneStage = MultiCloneStage.DEST_SCANNING; viewModel.scan(activity) }
-
-        when (val current = state) {
-            is ScanState.Success -> if (showClone) MultiFormatCloneScreen(cm, multiCloneStage, cloneSource, cloneOriginal, cloneEdited, cloneDestination, viewModel, onScanSource, onScanDest, { cloneEdited = it }, { cloneEdited = cloneOriginal }, { multiCloneStage = it }, resetClone) { showClone = false; resetClone() }
-                                   else ResultScreen(cm, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true }, { profileToSave = current.tag }, selectedProfile)
-            is ScanState.Partial -> if (showClone) MultiFormatCloneScreen(cm, multiCloneStage, cloneSource, cloneOriginal, cloneEdited, cloneDestination, viewModel, onScanSource, onScanDest, { cloneEdited = it }, { cloneEdited = cloneOriginal }, { multiCloneStage = it }, resetClone) { showClone = false; resetClone() }
-                                   else ResultScreen(cm, current.tag, viewModel, activity, { writerFor = current.tag }, { confirmFormat = true }, { profileToSave = current.tag }, selectedProfile)
-            else -> when {
-                showHistory  -> HistoryScreen(cm, history, onBack = { showHistory = false }, onDelete = viewModel::deleteHistory)
-                showClone    -> MultiFormatCloneScreen(cm, multiCloneStage, cloneSource, cloneOriginal, cloneEdited, cloneDestination, viewModel, onScanSource, onScanDest, { cloneEdited = it }, { cloneEdited = cloneOriginal }, { multiCloneStage = it }, resetClone) { showClone = false; resetClone() }
-                showProfiles -> ProfilesScreen(cm, profiles, selectedProfile, onBack = { showProfiles = false }, onUse = { viewModel.selectProfile(it); showProfiles = false }, onDelete = viewModel::deleteProfile)
-                else         -> HomeScreen(cm, viewModel, current, history, profiles, activity, openSettings, onShowHistory = { showHistory = true }, onShowProfiles = { showProfiles = true }, onClone = { showClone = true })
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("NFC Tool & AI Assistant", fontWeight = FontWeight.Bold)
+                        Text(
+                            when (selectedTab) {
+                                NavTab.READ -> "Scan & Analyze NFC / RFID Tags"
+                                NavTab.WRITE -> "Write NDEF & Clone Tags"
+                                NavTab.HISTORY -> "Scan History & Saved Profiles"
+                                NavTab.AI_CHAT -> "AI Assistant (${aiConfig.provider.displayName})"
+                                NavTab.SETTINGS -> "AI Provider & App Configuration"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                )
+            )
+        },
+        bottomBar = {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                NavigationBarItem(
+                    selected = selectedTab == NavTab.READ,
+                    onClick = { viewModel.selectTab(NavTab.READ) },
+                    icon = { Icon(Icons.Default.Sensors, contentDescription = "Read") },
+                    label = { Text("Read") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == NavTab.WRITE,
+                    onClick = { viewModel.selectTab(NavTab.WRITE) },
+                    icon = { Icon(Icons.Default.Edit, contentDescription = "Write") },
+                    label = { Text("Write") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == NavTab.HISTORY,
+                    onClick = { viewModel.selectTab(NavTab.HISTORY) },
+                    icon = { Icon(Icons.Default.History, contentDescription = "History") },
+                    label = { Text("History") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == NavTab.AI_CHAT,
+                    onClick = { viewModel.selectTab(NavTab.AI_CHAT) },
+                    icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "AI Assistant") },
+                    label = { Text("AI Chat") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == NavTab.SETTINGS,
+                    onClick = { viewModel.selectTab(NavTab.SETTINGS) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                    label = { Text("Settings") }
+                )
             }
+        }
+    ) { padding ->
+        val cm = Modifier
+            .padding(padding)
+            .consumeWindowInsets(padding)
+
+        when (selectedTab) {
+            NavTab.READ -> ReadTabScreen(
+                modifier = cm,
+                viewModel = viewModel,
+                state = state,
+                activity = activity,
+                openSettings = openSettings,
+                onWrite = { writerFor = it },
+                onFormat = { confirmFormat = true },
+                onSaveProfile = { profileToSave = it },
+                selectedProfile = selectedProfile
+            )
+            NavTab.WRITE -> WriteTabScreen(
+                modifier = cm,
+                viewModel = viewModel,
+                state = state,
+                activity = activity,
+                profiles = profiles,
+                selectedProfile = selectedProfile,
+                showClone = showClone,
+                multiCloneStage = multiCloneStage,
+                cloneSource = cloneSource,
+                cloneOriginal = cloneOriginal,
+                cloneEdited = cloneEdited,
+                cloneDestination = cloneDestination,
+                onOpenWriter = {
+                    val currentTag = when (val s = state) {
+                        is ScanState.Success -> s.tag
+                        is ScanState.Partial -> s.tag
+                        else -> null
+                    }
+                    if (currentTag != null) writerFor = currentTag
+                    else viewModel.scan(activity)
+                },
+                onFormat = { confirmFormat = true },
+                onToggleClone = { showClone = it; if (!it) resetClone() },
+                onSetStage = { multiCloneStage = it },
+                onUpdateCloneRecords = { cloneEdited = it },
+                onResetClone = resetClone
+            )
+            NavTab.HISTORY -> HistoryTabScreen(
+                modifier = cm,
+                history = history,
+                profiles = profiles,
+                selectedProfile = selectedProfile,
+                onSelectProfile = viewModel::selectProfile,
+                onDeleteProfile = viewModel::deleteProfile,
+                onDeleteHistory = viewModel::deleteHistory,
+                onGoToReader = { viewModel.selectTab(NavTab.READ) }
+            )
+            NavTab.AI_CHAT -> AiChatTabScreen(
+                modifier = cm,
+                viewModel = viewModel,
+                aiConfig = aiConfig,
+                chatMessages = chatMessages,
+                chatInput = chatInput,
+                isChatLoading = isChatLoading,
+                currentTag = when (val s = state) {
+                    is ScanState.Success -> s.tag
+                    is ScanState.Partial -> s.tag
+                    else -> null
+                }
+            )
+            NavTab.SETTINGS -> SettingsTabScreen(
+                modifier = cm,
+                viewModel = viewModel,
+                aiConfig = aiConfig
+            )
         }
     }
 
@@ -132,37 +273,548 @@ private fun NfcToolApp(viewModel: NfcViewModel, activity: MainActivity, openSett
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Home / History / Profiles / Scan screens  (unchanged)
+//  TAB 1: READ SCREEN
 // ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, history: List<HistoryItem>, profiles: List<NdefProfile>, activity: MainActivity, openSettings: () -> Unit, onShowHistory: () -> Unit, onShowProfiles: () -> Unit, onClone: () -> Unit) {
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
+private fun ReadTabScreen(
+    modifier: Modifier,
+    viewModel: NfcViewModel,
+    state: ScanState,
+    activity: MainActivity,
+    openSettings: () -> Unit,
+    onWrite: (TagSnapshot) -> Unit,
+    onFormat: () -> Unit,
+    onSaveProfile: (TagSnapshot) -> Unit,
+    selectedProfile: NdefProfile?
+) {
+    val tag = when (state) {
+        is ScanState.Success -> state.tag
+        is ScanState.Partial -> state.tag
+        else -> null
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
+    ) {
+        item { ScanPanel(viewModel, state, activity, openSettings) }
+
+        if (state is ScanState.Error) {
+            item { FailureCard(state.error, { viewModel.scan(activity) }) }
+        }
+
+        if (tag != null) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Tag Detected & Analyzed", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.weight(1f))
+                            Button(onClick = { viewModel.askAiAboutTag(tag) }) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Ask AI Assistant")
+                            }
+                        }
+                        Text("Only data exposed through public Android APIs is read.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            item { OverviewCard(tag) }
+            item { AttendanceCardSection(tag) }
+            item { NdefStatusCard(tag, onFormat) }
+            item { CapabilityMatrix(tag) }
+            item { Text("NDEF Message Payload", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+            if (tag.ndefRecords.isEmpty()) item { NdefDiagnosisCard(tag) }
+            else items(tag.ndefRecords, key = { it.rawHex }) { record -> NdefRecordCard(record) }
+            item { WriteActions(tag, { onWrite(tag) }, onFormat, selectedProfile, viewModel::writeSelectedProfile, viewModel::clearSelectedProfile) }
+            if (tag.rawNdef != null) item { OutlinedButton(onClick = { onSaveProfile(tag) }, modifier = Modifier.fillMaxWidth()) { Text("Save readable NDEF as profile") } }
+            item { TechnologiesCard(tag) }
+            item { SecurityCard(tag) }
+            item { TechnicalDetailsCard(tag) }
+        } else {
+            item { AttendanceMachineToolCard() }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TAB 2: WRITE & CLONE SCREEN
+// ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun WriteTabScreen(
+    modifier: Modifier,
+    viewModel: NfcViewModel,
+    state: ScanState,
+    activity: MainActivity,
+    profiles: List<NdefProfile>,
+    selectedProfile: NdefProfile?,
+    showClone: Boolean,
+    multiCloneStage: MultiCloneStage,
+    cloneSource: TagSnapshot?,
+    cloneOriginal: List<EditableNdefRecord>,
+    cloneEdited: List<EditableNdefRecord>,
+    cloneDestination: TagSnapshot?,
+    onOpenWriter: () -> Unit,
+    onFormat: () -> Unit,
+    onToggleClone: (Boolean) -> Unit,
+    onSetStage: (MultiCloneStage) -> Unit,
+    onUpdateCloneRecords: (List<EditableNdefRecord>) -> Unit,
+    onResetClone: () -> Unit
+) {
+    if (showClone) {
+        MultiFormatCloneScreen(
+            modifier = modifier,
+            stage = multiCloneStage,
+            source = cloneSource,
+            original = cloneOriginal,
+            edited = cloneEdited,
+            destination = cloneDestination,
+            viewModel = viewModel,
+            onScanSource = { onSetStage(MultiCloneStage.SOURCE_SCANNING); viewModel.scan(activity) },
+            onScanDest = { onSetStage(MultiCloneStage.DEST_SCANNING); viewModel.scan(activity) },
+            onUpdateRecords = onUpdateCloneRecords,
+            onReset = onResetClone,
+            onSetStage = onSetStage,
+            onCloneAnother = onResetClone,
+            onClose = { onToggleClone(false) }
+        )
+        return
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
+    ) {
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Advanced NFC Reader & Writer", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("Supports NTAG213/215/216, MIFARE Classic/Ultralight/DESFire/Plus, FeliCa, ICODE SLIX, Topaz 512/1024, ST25TN/TV/DV & Attendance Cards.")
+                    Text("NFC Writer & Payload Tools", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Write custom NDEF messages, format unformatted tags, or clone & edit payloads between tags.")
                 }
             }
         }
-        item { ScanPanel(vm, state, activity, openSettings) }
-        item { OutlinedButton(onClick = onClone, modifier = Modifier.fillMaxWidth()) { Text("Clone & Edit Tag (Multi-Format)") } }
-        item { AttendanceMachineToolCard() }
-        if (state is ScanState.Error) item { FailureCard(state.error, { vm.scan(activity) }) }
-        item { Text("Scan history", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-        if (history.isEmpty()) item { Text("No completed scans yet. NFC payloads are not saved to history.") }
-        else items(history.take(3), key = { it.id }) { entry ->
-            InfoCard(entry.uid ?: "UID unavailable") {
-                Text("${entry.technologies} · ${entry.records} NDEF record(s)")
-                Text("Write access: ${entry.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown"}")
-                TextButton(onClick = { vm.deleteHistory(entry.id) }) { Text("Remove") }
+
+        item {
+            Button(onClick = onOpenWriter, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Edit, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Write New NDEF Record")
             }
         }
-        if (history.isNotEmpty()) item { TextButton(onClick = onShowHistory, modifier = Modifier.fillMaxWidth()) { Text("View full history (${history.size})") } }
-        item { Text("Saved NDEF profiles", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-        item { Text("Profiles contain only readable NDEF messages. They do not copy UID, hardware identity, credentials, or protected data.") }
-        item { TextButton(onClick = onShowProfiles, modifier = Modifier.fillMaxWidth()) { Text("Manage profiles (${profiles.size})") } }
+
+        item {
+            OutlinedButton(onClick = { onToggleClone(true) }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Difference, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Clone & Edit Tag Payload (Multi-Format)")
+            }
+        }
+
+        item {
+            OutlinedButton(onClick = onFormat, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.CleaningServices, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Format Target Tag as NDEF")
+            }
+        }
+
+        item { Text("Saved NDEF Profiles for Writing", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        selectedProfile?.let { profile ->
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Active Profile Selected: ${profile.name}", fontWeight = FontWeight.Bold)
+                        Text("Hold a compatible writable NDEF tag against the phone and tap Write.")
+                        Button(onClick = { viewModel.writeSelectedProfile() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Write Selected Profile Now")
+                        }
+                        TextButton(onClick = { viewModel.clearSelectedProfile() }) { Text("Clear Selection") }
+                    }
+                }
+            }
+        }
+
+        if (profiles.isEmpty()) {
+            item { Text("No saved NDEF profiles yet. Scan a tag in the Read tab and tap 'Save readable NDEF as profile'.") }
+        } else {
+            items(profiles, key = { it.id }) { profile ->
+                InfoCard(profile.name) {
+                    Detail("Technologies", profile.technologies)
+                    Detail("NDEF Records", profile.recordCount.toString())
+                    Button(onClick = { viewModel.selectProfile(profile) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Select for Writing")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TAB 3: HISTORY SCREEN
+// ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun HistoryTabScreen(
+    modifier: Modifier,
+    history: List<HistoryItem>,
+    profiles: List<NdefProfile>,
+    selectedProfile: NdefProfile?,
+    onSelectProfile: (NdefProfile) -> Unit,
+    onDeleteProfile: (Long) -> Unit,
+    onDeleteHistory: (Long) -> Unit,
+    onGoToReader: () -> Unit
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
+    ) {
+        item {
+            Text("Scan History & Profiles", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Metadata of past scans and local NDEF profiles.")
+        }
+
+        item { Text("Scan History (${history.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        if (history.isEmpty()) {
+            item { Text("No past tag scans recorded yet.") }
+        } else {
+            items(history, key = { it.id }) { entry ->
+                InfoCard(entry.uid ?: "UID Unavailable") {
+                    Text(entry.technologies, fontWeight = FontWeight.Medium)
+                    Detail("NDEF Records", entry.records.toString())
+                    Detail("Write access", entry.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown")
+                    Detail("Protection", entry.protection.label)
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { onDeleteHistory(entry.id) }) { Text("Delete") }
+                    }
+                }
+            }
+        }
+
+        item { HorizontalDivider() }
+        item { Text("Saved Profiles (${profiles.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        if (profiles.isEmpty()) {
+            item { Text("No saved profiles.") }
+        } else {
+            items(profiles, key = { it.id }) { profile ->
+                InfoCard(profile.name) {
+                    Detail("Source UID", profile.sourceUid ?: unavailable())
+                    Detail("Records", profile.recordCount.toString())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { onSelectProfile(profile) }, modifier = Modifier.weight(1f)) { Text("Use Profile") }
+                        TextButton(onClick = { onDeleteProfile(profile.id) }) { Text("Delete") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TAB 4: AI CHATBOT SCREEN
+// ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun AiChatTabScreen(
+    modifier: Modifier,
+    viewModel: NfcViewModel,
+    aiConfig: AiConfig,
+    chatMessages: List<ChatMessage>,
+    chatInput: String,
+    isChatLoading: Boolean,
+    currentTag: TagSnapshot?
+) {
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(chatMessages.size) {
+        if (chatMessages.isNotEmpty()) {
+            listState.animateScrollToItem(chatMessages.size - 1)
+        }
+    }
+
+    Column(modifier.fillMaxSize().padding(12.dp)) {
+        // Active context badge
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("AI Provider: ${aiConfig.provider.displayName}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        if (currentTag != null) "Active Tag: ${currentTag.chipModel ?: "Detected Tag"} (${currentTag.uid ?: "No UID"})"
+                        else "No tag currently scanned. Ask general NFC questions!",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Chat messages list
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(chatMessages, key = { it.id }) { msg ->
+                ChatBubble(msg)
+            }
+            if (isChatLoading) {
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("AI is thinking…", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // Quick prompt chips
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            val prompts = listOf(
+                "Explain memory structure",
+                "Attendance Wiegand format",
+                "Is this tag cloneable?",
+                "How to format tag"
+            )
+            prompts.forEach { p ->
+                FilterChip(
+                    selected = false,
+                    onClick = { viewModel.sendChatMessage(p) },
+                    label = { Text(p, style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // Input row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = chatInput,
+                onValueChange = viewModel::setChatInput,
+                placeholder = { Text("Ask AI Assistant about NFC/RFID…") },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(24.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = { viewModel.sendChatMessage() },
+                enabled = chatInput.isNotBlank() && !isChatLoading,
+                modifier = Modifier.background(MaterialTheme.colorScheme.primary, CircleShape)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = MaterialTheme.colorScheme.onPrimary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatBubble(message: ChatMessage) {
+    val isUser = message.sender == ChatSender.USER
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Surface(
+            color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.widthIn(max = 300.dp)
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                Text(
+                    if (isUser) "You" else "AI Assistant",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(message.text, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TAB 5: SETTINGS & AI CONFIG SCREEN
+// ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun SettingsTabScreen(
+    modifier: Modifier,
+    viewModel: NfcViewModel,
+    aiConfig: AiConfig
+) {
+    var selectedProvider by remember(aiConfig) { mutableStateOf(aiConfig.provider) }
+    var apiKey by remember(aiConfig) { mutableStateOf(aiConfig.apiKey) }
+    var modelName by remember(aiConfig) { mutableStateOf(aiConfig.modelName) }
+    var customEndpoint by remember(aiConfig) { mutableStateOf(aiConfig.customEndpoint) }
+
+    var testStatus by remember { mutableStateOf<String?>(null) }
+    var showPassword by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
+    ) {
+        item {
+            Text("Settings & AI Configuration", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Configure AI providers (Gemini, OpenAI, Claude, Groq, Ollama) and app preferences.")
+        }
+
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("AI Provider", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                        AiProvider.values().forEach { provider ->
+                            FilterChip(
+                                selected = selectedProvider == provider,
+                                onClick = {
+                                    selectedProvider = provider
+                                    modelName = provider.defaultModel
+                                },
+                                label = { Text(provider.displayName) }
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        label = { Text("API Key (${selectedProvider.displayName})") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Icon(if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = null)
+                            }
+                        }
+                    )
+
+                    OutlinedTextField(
+                        value = modelName,
+                        onValueChange = { modelName = it },
+                        label = { Text("Model Name") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (selectedProvider == AiProvider.OLLAMA_CUSTOM) {
+                        OutlinedTextField(
+                            value = customEndpoint,
+                            onValueChange = { customEndpoint = it },
+                            label = { Text("Custom API Endpoint URL") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            viewModel.updateAiConfig(selectedProvider, apiKey, modelName, customEndpoint)
+                            testStatus = "Configuration Saved!"
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Save Configuration")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.updateAiConfig(selectedProvider, apiKey, modelName, customEndpoint)
+                            testStatus = "Testing connection to ${selectedProvider.displayName}…"
+                            viewModel.testAiConnection { res ->
+                                testStatus = res
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Test AI Connection")
+                    }
+
+                    testStatus?.let { status ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(status, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            InfoCard("Device NFC Capabilities") {
+                Detail("Android Version", android.os.Build.VERSION.RELEASE)
+                Detail("NFC Support", if (viewModel.supported()) "Hardware Available" else "Not Supported")
+                Detail("NFC Status", if (viewModel.enabled()) "Enabled" else "Disabled")
+                Detail("Supported Tech Standards", "NFC-A, NFC-B, NFC-F, NFC-V, ISO-DEP, MIFARE, NDEF")
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  HELPER CARDS & PANELS
+// ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun ScanPanel(vm: NfcViewModel, state: ScanState, activity: MainActivity, openSettings: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val status = when (state) {
+                ScanState.Scanning -> "Scanning for an NFC tag…"
+                is ScanState.TagDetected -> "Tag detected. Reading capabilities…"
+                is ScanState.Reading -> "Reading tag information…"
+                is ScanState.Writing -> "Writing NDEF data. Keep tag in place…"
+                is ScanState.Formatting -> "Formatting NDEF. Keep tag in place…"
+                else -> if (vm.enabled()) "NFC is enabled and scanning" else "NFC is disabled"
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Sensors, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("NFC Scanner Active", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            }
+            Text(status)
+            if (!vm.supported()) Text("This device does not support NFC.")
+            if (!vm.enabled()) TextButton(onClick = openSettings) { Text("Open NFC settings") }
+            Button(
+                onClick = { vm.scan(activity) },
+                enabled = vm.supported() && vm.enabled() && state !is ScanState.Reading && state !is ScanState.Writing && state !is ScanState.Formatting,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (state is ScanState.Scanning) "Re-scan" else "Trigger Manual Scan") }
+        }
     }
 }
 
@@ -235,114 +887,6 @@ private fun AttendanceMachineToolCard() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
-}
-
-@Composable
-private fun HistoryScreen(modifier: Modifier, history: List<HistoryItem>, onBack: () -> Unit, onDelete: (Long) -> Unit) {
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
-        item {
-            TextButton(onClick = onBack) { Text("Back to NFC Tool") }
-            Text("Scan history", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("Scan metadata only — NDEF payloads are not stored.")
-        }
-        if (history.isEmpty()) item { Text("No completed scans yet.") }
-        else items(history, key = { it.id }) { entry ->
-            InfoCard(entry.uid ?: "UID unavailable") {
-                Text(entry.technologies)
-                Detail("NDEF records", entry.records.toString())
-                Detail("Write access", entry.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown")
-                Detail("Protection", entry.protection.label)
-                TextButton(onClick = { onDelete(entry.id) }) { Text("Delete scan") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfilesScreen(modifier: Modifier, profiles: List<NdefProfile>, selected: NdefProfile?, onBack: () -> Unit, onUse: (NdefProfile) -> Unit, onDelete: (Long) -> Unit) {
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
-        item {
-            TextButton(onClick = onBack) { Text("Back to NFC Tool") }
-            Text("Saved NDEF profiles", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("A profile reproduces only the readable NDEF message on a compatible writable NDEF tag. UID, tag hardware identity, protected applications, and generic card emulation are not copied.")
-        }
-        selected?.let { profile -> item { InfoCard("Selected for next writable tag") { Text(profile.name); TextButton(onClick = onBack) { Text("Scan a target tag") } } } }
-        if (profiles.isEmpty()) item { Text("Save a readable NDEF message from a scan result to create a profile.") }
-        else items(profiles, key = { it.id }) { profile ->
-            InfoCard(profile.name) {
-                Detail("Source UID", profile.sourceUid ?: unavailable())
-                Detail("Detected technologies", profile.technologies)
-                Detail("NDEF records", profile.recordCount.toString())
-                Button(onClick = { onUse(profile) }, modifier = Modifier.fillMaxWidth()) { Text("Use on a writable tag") }
-                TextButton(onClick = { onDelete(profile.id) }) { Text("Delete profile") }
-            }
-        }
-        item { Text("Phone card emulation is unavailable for arbitrary physical NFC tags. Use an approved access-control mobile credential or a custom HCE protocol designed for a system you administer.", style = MaterialTheme.typography.bodySmall) }
-    }
-}
-
-@Composable
-private fun ProfileNameDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Save NDEF profile") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("This saves only the NDEF message Android read. It does not save or clone UID, hardware identity, protected credentials, or inaccessible data."); OutlinedTextField(name, { name = it }, label = { Text("Profile name") }, modifier = Modifier.fillMaxWidth()) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        confirmButton = { Button(onClick = { onSave(name) }) { Text("Save") } }
-    )
-}
-
-@Composable
-private fun ScanPanel(vm: NfcViewModel, state: ScanState, activity: MainActivity, openSettings: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            val status = when (state) {
-                ScanState.Scanning -> "Scanning for an NFC tag…"
-                is ScanState.TagDetected -> "Tag detected. Reading capabilities…"
-                is ScanState.Reading -> "Reading tag information…"
-                is ScanState.Writing -> "Writing NDEF data. Keep the tag in place…"
-                is ScanState.Formatting -> "Formatting NDEF. Keep the tag in place…"
-                else -> if (vm.enabled()) "NFC is enabled" else "NFC is disabled"
-            }
-            Text("Ready to scan", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(status)
-            if (!vm.supported()) Text("This device does not support NFC.")
-            if (!vm.enabled()) TextButton(onClick = openSettings) { Text("Open NFC settings") }
-            Button(
-                onClick = { vm.scan(activity) },
-                enabled = vm.supported() && vm.enabled() && state !is ScanState.Reading && state !is ScanState.Writing && state !is ScanState.Formatting,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(if (state is ScanState.Scanning) "Re-scan" else "Start scanning") }
-        }
-    }
-}
-
-@Composable
-private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel, activity: MainActivity, onWrite: () -> Unit, onFormat: () -> Unit, onSaveProfile: () -> Unit, selectedProfile: NdefProfile?) {
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(vertical = 20.dp)) {
-        item {
-            Text("NFC Tag Details", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("✓ Tag detected", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-            Text("Only information exposed through public Android NFC APIs is shown.")
-        }
-        item {
-            Button(onClick = { vm.scan(activity) }, modifier = Modifier.fillMaxWidth()) { Text("Scan Another Tag") }
-            TextButton(onClick = { vm.refreshTagCapabilities() }, modifier = Modifier.fillMaxWidth()) { Text("Re-scan current tag information") }
-        }
-        item { OverviewCard(tag) }
-        item { AttendanceCardSection(tag) }
-        item { NdefStatusCard(tag, onFormat) }
-        item { CapabilityMatrix(tag) }
-        item { Text("NDEF data", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-        if (tag.ndefRecords.isEmpty()) item { NdefDiagnosisCard(tag) }
-        else items(tag.ndefRecords, key = { it.rawHex }) { record -> NdefRecordCard(record) }
-        item { WriteActions(tag, onWrite, onFormat, selectedProfile, vm::writeSelectedProfile, vm::clearSelectedProfile) }
-        if (tag.rawNdef != null) item { OutlinedButton(onClick = onSaveProfile, modifier = Modifier.fillMaxWidth()) { Text("Save readable NDEF as profile") } }
-        item { TechnologiesCard(tag) }
-        item { SecurityCard(tag) }
-        item { TechnicalDetailsCard(tag) }
     }
 }
 
@@ -461,7 +1005,7 @@ private fun WriteDialog(tag: TagSnapshot, onDismiss: () -> Unit, onWrite: (List<
         title = { Text("Write NDEF") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { listOf("Text", "URL", "MIME", "External", "Raw").forEach { choice -> FilterChip(selected = type == choice, onClick = { type = choice }, label = { Text(choice) }) } }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) { listOf("Text", "URL", "MIME", "External", "Raw").forEach { choice -> FilterChip(selected = type == choice, onClick = { type = choice }, label = { Text(choice) }) } }
                 OutlinedTextField(value, { value = it }, label = { Text(if (type == "Raw") "Hex payload" else "Content") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
                 if (type == "Text" || type == "MIME" || type == "External") OutlinedTextField(metadata, { metadata = it }, label = { Text(if (type == "Text") "Language" else if (type == "MIME") "MIME type" else "domain:type") }, modifier = Modifier.fillMaxWidth())
                 Detail("Capacity", tag.maxSize?.let { "$it bytes" } ?: unavailable())
@@ -480,8 +1024,46 @@ private fun WriteDialog(tag: TagSnapshot, onDismiss: () -> Unit, onWrite: (List<
     )
 }
 
+@Composable
+private fun ProfileNameDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save NDEF profile") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("This saves only the NDEF message Android read. It does not save or clone UID, hardware identity, protected credentials, or inaccessible data."); OutlinedTextField(name, { name = it }, label = { Text("Profile name") }, modifier = Modifier.fillMaxWidth()) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { Button(onClick = { onSave(name) }) { Text("Save") } }
+    )
+}
+
+@Composable
+private fun FailureCard(error: NfcFailure, onRetry: () -> Unit) = Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(error.message, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+        Text(error.technical, style = MaterialTheme.typography.bodySmall)
+        Text(error.action, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+        Button(onClick = onRetry) { Text("Try Again") }
+    }
+}
+
+@Composable
+private fun InfoCard(title: String, content: @Composable ColumnScope.() -> Unit) = Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        content()
+    }
+}
+
+@Composable
+private fun Detail(label: String, value: String) = Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(value, fontWeight = FontWeight.Medium)
+}
+
+private fun unavailable() = "Unavailable through Android API"
+
 // ─────────────────────────────────────────────────────────────
-//  Multi-Format Clone & Edit  (new)
+//  Multi-Format Clone & Edit
 // ─────────────────────────────────────────────────────────────
 
 @Composable
@@ -513,44 +1095,17 @@ private fun MultiFormatCloneScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // ── Header ──────────────────────────────────────────
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onClose) { Text("← Back") }
+                TextButton(onClick = onClose) { Text("← Back to Writer") }
                 if (source != null && stage != MultiCloneStage.SOURCE_SCANNING) {
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = onScanSource) { Text("Re-scan source") }
                 }
             }
-            Text("Clone & Edit Tag", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(
-                "All Android-exposed formats are shown (NFC-A/B/F/V, MIFARE, ISO-DEP, NDEF). " +
-                        "Only NDEF records can be written to a destination tag via Android's public API.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text("Clone & Edit Tag Payload", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
 
-        // ── Flow indicator ───────────────────────────────────
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FlowStep("SOURCE", stage >= MultiCloneStage.SOURCE_READY)
-                FlowArrow()
-                FlowStep("READ", stage >= MultiCloneStage.SOURCE_READY)
-                FlowArrow()
-                FlowStep("EDIT", stage >= MultiCloneStage.DEST_READY)
-                FlowArrow()
-                FlowStep("WRITE", stage >= MultiCloneStage.SUCCESS)
-                FlowArrow()
-                FlowStep("VERIFY", stage == MultiCloneStage.SUCCESS)
-            }
-        }
-
-        // ── SOURCE card ─────────────────────────────────────
         item {
             SourceTagCard(
                 tag = source,
@@ -559,7 +1114,6 @@ private fun MultiFormatCloneScreen(
             )
         }
 
-        // ── DESTINATION / result area ────────────────────────
         when (stage) {
             MultiCloneStage.IDLE -> item {
                 DestinationTagCard(
@@ -569,9 +1123,7 @@ private fun MultiFormatCloneScreen(
                     onEdit = { editing = it }, onReset = onReset, onWrite = {}
                 )
             }
-
-            MultiCloneStage.SOURCE_SCANNING -> { /* source card already shows progress spinner */ }
-
+            MultiCloneStage.SOURCE_SCANNING -> {}
             MultiCloneStage.SOURCE_READY -> item {
                 DestinationTagCard(
                     tag = null, sourceScanned = true, original = original, edited = edited,
@@ -586,7 +1138,6 @@ private fun MultiFormatCloneScreen(
                     }
                 )
             }
-
             MultiCloneStage.DEST_SCANNING -> item {
                 DestinationTagCard(
                     tag = null, sourceScanned = true, original = original, edited = edited,
@@ -595,7 +1146,6 @@ private fun MultiFormatCloneScreen(
                     onEdit = { editing = it }, onReset = onReset, onWrite = {}
                 )
             }
-
             MultiCloneStage.DEST_READY -> item {
                 DestinationTagCard(
                     tag = destination, sourceScanned = true, original = original, edited = edited,
@@ -610,11 +1160,9 @@ private fun MultiFormatCloneScreen(
                     }
                 )
             }
-
             MultiCloneStage.WRITING -> item {
-                ProgressCard("Writing & verifying", "Keep the destination tag against the phone. The app will re-read it and compare the NDEF message byte-for-byte.")
+                ProgressCard("Writing & verifying", "Keep destination tag against phone.")
             }
-
             MultiCloneStage.SUCCESS -> item {
                 CloneSuccessCard(
                     recordCount = edited.size,
@@ -625,32 +1173,15 @@ private fun MultiFormatCloneScreen(
                     onViewDetails = { onSetStage(MultiCloneStage.DEST_READY) }
                 )
             }
-
             MultiCloneStage.VERIFY_FAILED -> item {
                 FailureCard(
-                    NfcFailure.Simple(
-                        "Write verification failed",
-                        "The re-read destination NDEF message did not match the edited message byte-for-byte.",
-                        "Keep the destination tag in place and tap 'Try again'."
-                    ),
+                    NfcFailure.Simple("Write verification failed", "Re-read message did not match.", "Keep tag against phone and try again."),
                     onScanDest
-                )
-            }
-        }
-
-        // NDEF build errors
-        built.exceptionOrNull()?.let { err ->
-            item {
-                Text(
-                    "Cannot build NDEF message: ${err.message}",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
                 )
             }
         }
     }
 
-    // Edit-record dialog (hoisted here so it overlays the LazyColumn)
     editing?.let { record ->
         EditNdefRecordDialog(
             record = record,
@@ -663,133 +1194,27 @@ private fun MultiFormatCloneScreen(
     }
 }
 
-// ── SOURCE TAG CARD ────────────────────────────────────────────
-
 @Composable
 private fun SourceTagCard(tag: TagSnapshot?, isScanning: Boolean, onScan: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (tag != null) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant
-        )
+        colors = CardDefaults.cardColors(containerColor = if (tag != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Card header badge
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        "  SOURCE TAG  ",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                if (tag != null) {
-                    Text("✓ Read", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            when {
-                isScanning -> {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text("Hold source tag against the phone…")
-                    }
-                }
-
-                tag == null -> {
-                    Text("Tap to scan your source NFC tag.", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "All Android-exposed data is captured: UID, technology stack (NFC-A/B/F/V, MIFARE, ISO-DEP), " +
-                                "NDEF records, and the raw NDEF byte sequence.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
-                        Text("Scan Source Tag")
-                    }
-                }
-
-                else -> {
-                    // ── Overview ──
-                    TagSectionHeader("Overview")
-                    Detail("UID", tag.uid ?: unavailable())
-                    Detail("NDEF", tag.ndefAvailability.label)
-                    Detail("Write access", tag.writable?.let { if (it) "Writable" else "Read-only" } ?: "Unknown")
-                    Detail("Protection", tag.protection.label)
-
-                    HorizontalDivider()
-
-                    // ── Technology stack ──
-                    TagSectionHeader("Technology Stack (${tag.technologies.size} detected)")
-                    if (tag.technologies.isEmpty()) {
-                        Text(unavailable(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        tag.technologies.forEach { tech ->
-                            Text("✓ ${tech.name}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            tech.values.forEach { (key, value) ->
-                                Row(
-                                    Modifier.padding(start = 14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("$key: ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                                }
-                            }
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    // ── NDEF Records ──
-                    TagSectionHeader("NDEF Records (${tag.ndefRecords.size})")
-                    if (tag.ndefRecords.isEmpty()) {
-                        Text(tag.ndefDiagnosis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        tag.ndefRecords.forEachIndexed { i, record ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.surface,
-                                shape = MaterialTheme.shapes.small,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Text("Record ${i + 1} · ${record.kind}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                    Detail("Type", record.type)
-                                    record.language?.let { Detail("Language", it) }
-                                    Detail("Value", record.value)
-                                    val hexPrev = if (record.rawHex.length > 90) record.rawHex.take(90) + "…" else record.rawHex
-                                    Detail("Raw hex", hexPrev)
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Raw NDEF bytes ──
-                    tag.rawNdef?.let { raw ->
-                        HorizontalDivider()
-                        TagSectionHeader("Raw NDEF Message (${raw.size} bytes)")
-                        val hex = raw.joinToString(" ") { "%02X".format(it) }
-                        Text(
-                            if (hex.length > 260) hex.take(260) + " …" else hex,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text("Displayed read-only. Original source data is never modified.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+            Text("SOURCE TAG", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            if (isScanning) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Text("Hold source tag against phone…")
+            } else if (tag == null) {
+                Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan Source Tag") }
+            } else {
+                Detail("Chip Model", tag.chipModel ?: "Unknown")
+                Detail("UID", tag.uid ?: unavailable())
+                Detail("NDEF Records", tag.ndefRecords.size.toString())
             }
         }
     }
 }
-
-// ── DESTINATION TAG CARD ───────────────────────────────────────
 
 @Composable
 private fun DestinationTagCard(
@@ -806,386 +1231,49 @@ private fun DestinationTagCard(
     onReset: () -> Unit,
     onWrite: () -> Unit
 ) {
-    val canWrite = tag?.writable == true &&
-            edited.isNotEmpty() &&
-            messageSize != null && messageSize > 0 &&
-            tag.maxSize != null && messageSize <= tag.maxSize
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                canWrite -> MaterialTheme.colorScheme.secondaryContainer
-                else -> MaterialTheme.colorScheme.surfaceVariant
-            }
-        )
-    ) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Card header badge
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondary,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        "  DESTINATION TAG  ",
-                        color = MaterialTheme.colorScheme.onSecondary,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                if (tag != null) {
-                    Text(
-                        if (canWrite) "✓ Writable" else "Not writable",
-                        color = if (canWrite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // ── Editable NDEF records (shown once source is scanned) ──
+            Text("DESTINATION TAG", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
             if (sourceScanned) {
-                TagSectionHeader("NDEF Records to Write")
-                Text(
-                    "Edit records below. Original source data is never changed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                // Change summary chips
-                if (original.isNotEmpty()) {
-                    val modifiedCount = edited.count { e -> original.any { o -> o.id == e.id && o != e } }
-                    val addedCount = edited.count { e -> original.none { o -> o.id == e.id } }
-                    val deletedCount = original.count { o -> edited.none { e -> e.id == o.id } }
-                    if (modifiedCount > 0 || addedCount > 0 || deletedCount > 0) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (modifiedCount > 0) AssistChip(onClick = {}, label = { Text("$modifiedCount modified") })
-                            if (addedCount > 0) AssistChip(onClick = {}, label = { Text("$addedCount added") })
-                            if (deletedCount > 0) AssistChip(onClick = {}, label = { Text("$deletedCount deleted") })
-                        }
+                edited.forEachIndexed { i, record ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Record ${i + 1}: ${record.kind} (${record.value})", modifier = Modifier.weight(1f))
+                        IconButton(onClick = { onEdit(record) }) { Icon(Icons.Default.Edit, contentDescription = null) }
                     }
                 }
-
-                if (edited.isEmpty()) {
-                    Text(
-                        "No records. Tap '+ Add Record' to create one.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    edited.forEachIndexed { i, record ->
-                        val isNew = original.none { o -> o.id == record.id }
-                        val isModified = !isNew && original.any { o -> o.id == record.id && o != record }
-                        EditableRecordItem(
-                            index = i,
-                            record = record,
-                            isNew = isNew,
-                            isModified = isModified,
-                            onEdit = { onEdit(record) },
-                            onDelete = { onUpdateRecords(edited.filterNot { it.id == record.id }) },
-                            onCopy = { onUpdateRecords(edited + record.copy(id = System.nanoTime())) }
-                        )
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { onUpdateRecords(edited + EditableNdefRecord(System.nanoTime(), "Text", "T", "", "en")) },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("+ Add Record") }
-                    OutlinedButton(onClick = onReset, modifier = Modifier.weight(1f)) { Text("Reset Changes") }
-                }
-
-                messageSize?.let {
-                    Text("Message size: $it bytes", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-
-                HorizontalDivider()
+                Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan & Write Destination Tag") }
             }
-
-            // ── Scanning state ──
-            if (isScanning) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Text("Hold destination tag against the phone…")
-                }
-                return@Column
-            }
-
-            // ── No destination scanned yet ──
-            if (tag == null) {
-                Text(
-                    if (canScan) "Scan a writable NFC tag to write the records above to it."
-                    else "Scan the source tag first.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(onClick = onScan, modifier = Modifier.fillMaxWidth(), enabled = canScan) {
-                    Text("Scan Destination Tag")
-                }
-                return@Column
-            }
-
-            // ── Destination tag info (after scan) ──
-            TagSectionHeader("Destination Tag Info")
-            Detail("UID", tag.uid ?: unavailable())
-            Detail("NDEF", tag.ndefAvailability.label)
-            Detail("Writable", tag.writable?.let { if (it) "Yes" else "No" } ?: "Unknown")
-            Detail("Capacity", tag.maxSize?.let { "$it bytes" } ?: unavailable())
-            messageSize?.let { req ->
-                Detail("Required", "$req bytes")
-                tag.maxSize?.let { cap ->
-                    if (req <= cap) Detail("Available after write", "${cap - req} bytes")
-                }
-            }
-
-            // Destination technology stack (read-only reference)
-            if (tag.technologies.isNotEmpty()) {
-                Text(
-                    "Technologies: ${tag.technologies.joinToString { it.name }}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // Error if can't write
-            if (!canWrite) {
-                Text(
-                    when {
-                        edited.isEmpty() -> "Add at least one NDEF record above before writing."
-                        tag.writable == false -> "This tag's NDEF interface is read-only."
-                        messageSize != null && tag.maxSize != null && messageSize > tag.maxSize ->
-                            "Insufficient capacity: ${messageSize}B needed, ${tag.maxSize}B available."
-                        else -> "No writable NDEF interface is exposed by Android for this tag."
-                    },
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-
-            Button(onClick = onWrite, enabled = canWrite, modifier = Modifier.fillMaxWidth()) {
-                Text("Write to Destination Tag")
-            }
-            TextButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan Different Destination") }
         }
     }
 }
-
-// ── EDITABLE RECORD ITEM ───────────────────────────────────────
 
 @Composable
-private fun EditableRecordItem(
-    index: Int,
-    record: EditableNdefRecord,
-    isNew: Boolean,
-    isModified: Boolean,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onCopy: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Record ${index + 1}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.extraSmall) {
-                    Text("  ${record.kind}  ", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                }
-                when {
-                    isNew -> Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.extraSmall) {
-                        Text("  NEW  ", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                    }
-                    isModified -> Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.extraSmall) {
-                        Text("  EDITED  ", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                    }
-                }
-            }
-            if (record.type.isNotBlank() && record.type !in listOf("T", "U", "Sp")) {
-                Text("Type: ${record.type}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(
-                "Value: ${record.value.ifBlank { "(empty)" }}",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            if (record.metadata.isNotBlank()) {
-                Text("Metadata: ${record.metadata}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                TextButton(onClick = onEdit, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) { Text("Edit") }
-                TextButton(onClick = onDelete, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) { Text("Delete") }
-                TextButton(onClick = onCopy, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) { Text("Copy") }
-            }
-        }
+private fun ProgressCard(title: String, message: String) = Card(modifier = Modifier.fillMaxWidth()) {
+    Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        CircularProgressIndicator()
+        Spacer(Modifier.height(8.dp))
+        Text(title, fontWeight = FontWeight.Bold)
+        Text(message, style = MaterialTheme.typography.bodySmall)
     }
 }
-
-// ── CLONE SUCCESS CARD ─────────────────────────────────────────
 
 @Composable
-private fun CloneSuccessCard(
-    recordCount: Int,
-    destination: TagSnapshot?,
-    edited: List<EditableNdefRecord>,
-    onEditAgain: () -> Unit,
-    onCloneAnother: () -> Unit,
-    onViewDetails: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                "✓ Clone & Write Successful",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Detail("Records written", recordCount.toString())
-            Detail("Verification", "Passed — destination NDEF matches edited message")
-            destination?.maxSize?.let { Detail("Destination capacity", "$it bytes") }
-
-            HorizontalDivider()
-
-            Text("Written Records", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            edited.forEachIndexed { i, r ->
-                val preview = if (r.value.length > 72) r.value.take(72) + "…" else r.value
-                Text("${i + 1}. ${r.kind}: $preview", style = MaterialTheme.typography.bodySmall)
-            }
-
-            HorizontalDivider()
-
-            Button(onClick = onEditAgain, modifier = Modifier.fillMaxWidth()) { Text("Edit Again") }
-            OutlinedButton(onClick = onCloneAnother, modifier = Modifier.fillMaxWidth()) { Text("Clone Another Tag") }
-            TextButton(onClick = onViewDetails, modifier = Modifier.fillMaxWidth()) { Text("View Details") }
-        }
+private fun CloneSuccessCard(recordCount: Int, destination: TagSnapshot?, edited: List<EditableNdefRecord>, onEditAgain: () -> Unit, onCloneAnother: () -> Unit, onViewDetails: () -> Unit) = Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("✓ Clone Success", fontWeight = FontWeight.Bold)
+        Text("Wrote $recordCount NDEF record(s) successfully.")
+        Button(onClick = onCloneAnother, modifier = Modifier.fillMaxWidth()) { Text("Clone Another Tag") }
     }
 }
-
-// ── EDIT NDEF RECORD DIALOG ────────────────────────────────────
 
 @Composable
 private fun EditNdefRecordDialog(record: EditableNdefRecord, onDismiss: () -> Unit, onSave: (EditableNdefRecord) -> Unit) {
-    var kind by remember { mutableStateOf(record.kind) }
-    var type by remember { mutableStateOf(record.type) }
-    var value by remember { mutableStateOf(record.value) }
-    var metadata by remember { mutableStateOf(record.metadata) }
+    var valStr by remember { mutableStateOf(record.value) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit NDEF record") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    listOf("Text", "URI", "MIME", "External type", "Smart Poster").forEach { choice ->
-                        FilterChip(selected = kind == choice, onClick = { kind = choice }, label = { Text(choice) })
-                    }
-                }
-                OutlinedTextField(value, { value = it }, label = { Text("Value") }, modifier = Modifier.fillMaxWidth())
-                if (kind in listOf("Text", "MIME", "External type", "Smart Poster")) {
-                    OutlinedTextField(
-                        metadata, { metadata = it },
-                        label = {
-                            Text(
-                                when (kind) {
-                                    "Text" -> "Language (e.g. en)"
-                                    "Smart Poster" -> "Title"
-                                    else -> "Type"
-                                }
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (kind in listOf("MIME", "External type")) {
-                    OutlinedTextField(
-                        type, { type = it },
-                        label = { Text(if (kind == "MIME") "MIME type" else "domain:type") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        },
+        title = { Text("Edit Record") },
+        text = { OutlinedTextField(valStr, { valStr = it }, label = { Text("Value") }, modifier = Modifier.fillMaxWidth()) },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        confirmButton = {
-            Button(
-                onClick = { onSave(record.copy(kind = kind, type = type, value = value, metadata = metadata)) },
-                enabled = value.isNotBlank()
-            ) { Text("Save Changes") }
-        }
+        confirmButton = { Button(onClick = { onSave(record.copy(value = valStr)) }) { Text("Save") } }
     )
-}
-
-// ─────────────────────────────────────────────────────────────
-//  Shared helper composables
-// ─────────────────────────────────────────────────────────────
-
-@Composable
-private fun FlowStep(label: String, active: Boolean) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelSmall,
-        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
-    )
-}
-
-@Composable
-private fun FlowArrow() {
-    Text(" → ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-@Composable
-private fun TagSectionHeader(title: String) {
-    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-}
-
-@Composable
-private fun ProgressCard(title: String, detail: String) =
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            CircularProgressIndicator()
-            Text(title, fontWeight = FontWeight.Bold)
-            Text(detail)
-        }
-    }
-
-@Composable
-private fun InfoCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-            content()
-        }
-    }
-}
-
-@Composable private fun Detail(label: String, value: String) { Text("$label: $value", style = MaterialTheme.typography.bodyMedium) }
-
-@Composable private fun FailureCard(error: NfcFailure, retry: () -> Unit) =
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(error.message, fontWeight = FontWeight.Bold)
-            Text(error.action)
-            Text(error.technical, style = MaterialTheme.typography.bodySmall)
-            Button(onClick = retry) { Text("Try again") }
-        }
-    }
-
-private fun unavailable() = "Unavailable through Android API"
-
-// ─────────────────────────────────────────────────────────────
-//  Stage enum
-// ─────────────────────────────────────────────────────────────
-
-private enum class MultiCloneStage {
-    IDLE, SOURCE_SCANNING, SOURCE_READY, DEST_SCANNING, DEST_READY, WRITING, SUCCESS, VERIFY_FAILED
 }

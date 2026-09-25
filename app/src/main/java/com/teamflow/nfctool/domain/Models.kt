@@ -1,5 +1,37 @@
 package com.teamflow.nfctool.domain
 
+enum class NavTab(val title: String) {
+    READ("Read"),
+    WRITE("Write"),
+    HISTORY("History"),
+    AI_CHAT("AI Assistant"),
+    SETTINGS("Settings")
+}
+
+enum class AiProvider(val displayName: String, val defaultModel: String) {
+    GEMINI("Google Gemini", "gemini-1.5-flash"),
+    OPENAI("OpenAI GPT", "gpt-4o-mini"),
+    CLAUDE("Anthropic Claude", "claude-3-5-haiku-20241022"),
+    GROQ("Groq Llama", "llama-3.3-70b-versatile"),
+    OLLAMA_CUSTOM("Ollama / Custom API", "llama3")
+}
+
+data class AiConfig(
+    val provider: AiProvider = AiProvider.GEMINI,
+    val apiKey: String = "",
+    val modelName: String = "gemini-1.5-flash",
+    val customEndpoint: String = "http://localhost:11434/v1/chat/completions"
+)
+
+enum class ChatSender { USER, AI }
+
+data class ChatMessage(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val sender: ChatSender,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 enum class NdefAvailability(val label: String) {
     AVAILABLE("Available"), EMPTY("Available, no records"), FORMATABLE("Formatable"),
     PARTIAL("Partially accessible"), UNAVAILABLE("Not available")
