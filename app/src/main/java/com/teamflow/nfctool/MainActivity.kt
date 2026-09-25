@@ -44,7 +44,24 @@ class MainActivity : ComponentActivity() {
         viewModel.handleIntent(intent)
         setContent {
             MaterialTheme(
-                colorScheme = darkColorScheme()
+                colorScheme = lightColorScheme(
+                    primary = androidx.compose.ui.graphics.Color(0xFF1E66F5),
+                    onPrimary = androidx.compose.ui.graphics.Color.White,
+                    primaryContainer = androidx.compose.ui.graphics.Color(0xFFE8F0FE),
+                    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF041E49),
+                    secondary = androidx.compose.ui.graphics.Color(0xFF00897B),
+                    onSecondary = androidx.compose.ui.graphics.Color.White,
+                    secondaryContainer = androidx.compose.ui.graphics.Color(0xFFE0F2F1),
+                    onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFF004D40),
+                    surface = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
+                    onSurface = androidx.compose.ui.graphics.Color(0xFF191C1E),
+                    surfaceVariant = androidx.compose.ui.graphics.Color(0xFFF1F5F9),
+                    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF334155),
+                    surfaceContainer = androidx.compose.ui.graphics.Color(0xFFF8FAFC),
+                    surfaceContainerHigh = androidx.compose.ui.graphics.Color(0xFFEDF2F7),
+                    background = androidx.compose.ui.graphics.Color(0xFFFAFAFA),
+                    onBackground = androidx.compose.ui.graphics.Color(0xFF191C1E)
+                )
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
