@@ -26,11 +26,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
 import com.teamflow.nfctool.domain.*
 import com.teamflow.nfctool.nfc.NdefCodec
 import com.teamflow.nfctool.presentation.NfcViewModel
@@ -324,18 +332,25 @@ private fun ReadTabScreen(
 
         if (tag != null) {
             item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(8.dp))
                             Text("Tag Detected & Analyzed", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.weight(1f))
-                            Button(onClick = { viewModel.askAiAboutTag(tag) }) {
-                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Ask AI Assistant")
-                            }
                         }
-                        Text("Only data exposed through public Android APIs is read.", style = MaterialTheme.typography.bodySmall)
+                        Text("Only data exposed through public Android APIs is read.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Button(
+                            onClick = { viewModel.askAiAboutTag(tag) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Ask AI Assistant About This Tag")
+                        }
                     }
                 }
             }
@@ -664,7 +679,7 @@ private fun ChatBubble(message: ChatMessage) {
         Surface(
             color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.widthIn(max = 300.dp)
+            modifier = Modifier.widthIn(max = 320.dp)
         ) {
             Column(Modifier.padding(12.dp)) {
                 Text(
@@ -674,9 +689,112 @@ private fun ChatBubble(message: ChatMessage) {
                     color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                FormattedMarkdownText(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun FormattedMarkdownText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
+    color: Color = Color.Unspecified
+) {
+    val annotatedString = remember(text) {
+        parseMarkdownToAnnotatedString(text)
+    }
+    Text(
+        text = annotatedString,
+        modifier = modifier,
+        style = style,
+        color = color
+    )
+}
+
+private fun parseMarkdownToAnnotatedString(text: String): AnnotatedString {
+    return buildAnnotatedString {
+        val lines = text.split("\n")
+        lines.forEachIndexed { index, line ->
+            val trimmed = line.trim()
+            when {
+                trimmed.startsWith("### ") -> {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 15.sp)) {
+                        appendMarkdownInline(trimmed.removePrefix("### "))
+                    }
+                }
+                trimmed.startsWith("## ") -> {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)) {
+                        appendMarkdownInline(trimmed.removePrefix("## "))
+                    }
+                }
+                trimmed.startsWith("# ") -> {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 18.sp)) {
+                        appendMarkdownInline(trimmed.removePrefix("# "))
+                    }
+                }
+                trimmed.startsWith("• ") || trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+                    append("• ")
+                    val content = if (trimmed.startsWith("• ")) trimmed.removePrefix("• ")
+                    else if (trimmed.startsWith("- ")) trimmed.removePrefix("- ")
+                    else trimmed.removePrefix("* ")
+                    appendMarkdownInline(content)
+                }
+                else -> {
+                    appendMarkdownInline(line)
+                }
+            }
+            if (index < lines.size - 1) {
+                append("\n")
+            }
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.appendMarkdownInline(text: String) {
+    val regex = Regex("""(\*\*(.*?)\*\*|`(.*?)`|\*(.*?)\*)""")
+    var lastIdx = 0
+
+    regex.findAll(text).forEach { match ->
+        val range = match.range
+        if (range.first > lastIdx) {
+            append(text.substring(lastIdx, range.first))
+        }
+
+        val fullMatch = match.value
+        when {
+            fullMatch.startsWith("**") && fullMatch.endsWith("**") -> {
+                val boldText = match.groupValues[2]
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(boldText)
+                }
+            }
+            fullMatch.startsWith("`") && fullMatch.endsWith("`") -> {
+                val codeText = match.groupValues[3]
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x20888888))) {
+                    append(" $codeText ")
+                }
+            }
+            fullMatch.startsWith("*") && fullMatch.endsWith("*") -> {
+                val italicText = match.groupValues[4]
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                    append(italicText)
+                }
+            }
+            else -> {
+                append(fullMatch)
+            }
+        }
+        lastIdx = range.last + 1
+    }
+
+    if (lastIdx < text.length) {
+        append(text.substring(lastIdx))
     }
 }
 
