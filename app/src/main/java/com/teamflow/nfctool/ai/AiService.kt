@@ -40,7 +40,18 @@ class AiService {
                 AiProvider.CLAUDE -> callClaudeApi(fullPrompt, config)
             }
         }.getOrElse { error ->
-            "AI Service Error (${error.javaClass.simpleName}): ${error.message ?: "Could not connect to ${config.provider.displayName}."}\n\nFalling back to local technical assistant:\n\n" + generateLocalFallback(prompt, currentTag)
+            val errMsg = error.message ?: ""
+            if (errMsg.contains("model_not_found") || errMsg.contains("does not exist")) {
+                "⚠️ **Model Not Found**: The model `${config.modelName}` was not found on ${config.provider.displayName}.\n\n" +
+                "💡 **Solution**: Open the **Settings** tab and set the Model Name to an active model:\n" +
+                "• **Groq**: `llama-3.1-8b-instant` or `llama-3.3-70b-specdec` or `mixtral-8x7b-32768`\n" +
+                "• **OpenAI**: `gpt-4o-mini` or `gpt-4o`\n" +
+                "• **Gemini**: `gemini-1.5-flash` or `gemini-2.0-flash`\n\n" +
+                "---\n" +
+                generateLocalFallback(prompt, currentTag)
+            } else {
+                "AI Service Error (${error.javaClass.simpleName}): ${error.message ?: "Could not connect to ${config.provider.displayName}."}\n\nFalling back to local technical assistant:\n\n" + generateLocalFallback(prompt, currentTag)
+            }
         }
     }
 
@@ -86,7 +97,8 @@ class AiService {
     }
 
     private fun callOpenAiApi(endpoint: String, prompt: String, config: AiConfig): String {
-        val model = config.modelName.ifBlank { "gpt-4o-mini" }
+        val defaultM = if (config.provider == AiProvider.GROQ) "llama-3.1-8b-instant" else "gpt-4o-mini"
+        val model = config.modelName.ifBlank { defaultM }
         val url = URL(endpoint)
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"

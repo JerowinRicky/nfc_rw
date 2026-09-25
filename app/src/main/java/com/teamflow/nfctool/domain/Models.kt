@@ -12,7 +12,7 @@ enum class AiProvider(val displayName: String, val defaultModel: String) {
     GEMINI("Google Gemini", "gemini-1.5-flash"),
     OPENAI("OpenAI GPT", "gpt-4o-mini"),
     CLAUDE("Anthropic Claude", "claude-3-5-haiku-20241022"),
-    GROQ("Groq Llama", "llama-3.3-70b-versatile"),
+    GROQ("Groq Llama", "llama-3.1-8b-instant"),
     OLLAMA_CUSTOM("Ollama / Custom API", "llama3")
 }
 
