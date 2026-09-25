@@ -1,9 +1,11 @@
 package com.teamflow.nfctool.presentation
 
+import android.content.Intent
 import android.app.Activity
 import android.content.Context
 import android.nfc.NdefMessage
 import android.nfc.NdefRecord
+import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.TagLostException
 import android.util.Base64
@@ -48,12 +50,36 @@ class NfcViewModel(private val repository: NfcRepository, private val context: C
     }
 
     fun resume(activity: Activity) {
-        if (_state.value is ScanState.Scanning) beginReaderSession(activity)
+        if (supported() && enabled()) {
+            beginReaderSession(activity)
+        }
+    }
+
+    fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+        val action = intent.action
+        if (action == NfcAdapter.ACTION_TAG_DISCOVERED ||
+            action == NfcAdapter.ACTION_TECH_DISCOVERED ||
+            action == NfcAdapter.ACTION_NDEF_DISCOVERED
+        ) {
+            val tag = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+            }
+            if (tag != null) {
+                currentTag = tag
+                val uid = tag.id?.joinToString(" ") { "%02X".format(it) }
+                _state.value = ScanState.TagDetected(uid)
+                _state.value = ScanState.Reading(uid)
+                readCurrentTag()
+            }
+        }
     }
 
     private fun beginReaderSession(activity: Activity) {
         repository.startScanning(activity) { tag ->
-            repository.stopScanning(activity)
             currentTag = tag
             val uid = tag.id?.joinToString(" ") { "%02X".format(it) }
             _state.value = ScanState.TagDetected(uid)

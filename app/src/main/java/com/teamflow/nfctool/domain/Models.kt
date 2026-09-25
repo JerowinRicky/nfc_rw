@@ -16,8 +16,20 @@ data class NdefRecordInfo(
 
 data class TechInfo(val name: String, val values: List<Pair<String, String>>)
 
+data class AttendanceCardInfo(
+    val wiegand26Facility: Int?,
+    val wiegand26Card: Int?,
+    val wiegand26Dec10: String?,
+    val wiegand34Facility: Int?,
+    val wiegand34Card: Int?,
+    val uidHexBigEndian: String?,
+    val uidHexLittleEndian: String?,
+    val attendanceMachineNotes: String
+)
+
 data class TagSnapshot(
     val uid: String?,
+    val chipModel: String? = null,
     val technologies: List<TechInfo>,
     val ndefRecords: List<NdefRecordInfo>,
     val ndefAvailability: NdefAvailability,
@@ -29,6 +41,7 @@ data class TagSnapshot(
     val protectionReason: String,
     val ndefDiagnosis: String,
     val rawNdef: ByteArray?,
+    val attendanceInfo: AttendanceCardInfo? = null,
     val scannedAt: Long = System.currentTimeMillis()
 )
 

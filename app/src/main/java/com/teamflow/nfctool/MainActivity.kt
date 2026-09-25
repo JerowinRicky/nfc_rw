@@ -31,7 +31,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        viewModel.handleIntent(intent)
         setContent { MaterialTheme { NfcToolApp(viewModel, this) { startActivity(Intent(AndroidSettings.ACTION_NFC_SETTINGS)) } } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        viewModel.handleIntent(intent)
     }
 
     override fun onPause() { super.onPause(); viewModel.stop(this) }
@@ -135,12 +142,13 @@ private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, h
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Advanced NFC Reader & Writer", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("Read only the technologies and data Android legitimately exposes. Protected credentials are never bypassed.")
+                    Text("Supports NTAG213/215/216, MIFARE Classic/Ultralight/DESFire/Plus, FeliCa, ICODE SLIX, Topaz 512/1024, ST25TN/TV/DV & Attendance Cards.")
                 }
             }
         }
         item { ScanPanel(vm, state, activity, openSettings) }
         item { OutlinedButton(onClick = onClone, modifier = Modifier.fillMaxWidth()) { Text("Clone & Edit Tag (Multi-Format)") } }
+        item { AttendanceMachineToolCard() }
         if (state is ScanState.Error) item { FailureCard(state.error, { vm.scan(activity) }) }
         item { Text("Scan history", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         if (history.isEmpty()) item { Text("No completed scans yet. NFC payloads are not saved to history.") }
@@ -155,6 +163,78 @@ private fun HomeScreen(modifier: Modifier, vm: NfcViewModel, state: ScanState, h
         item { Text("Saved NDEF profiles", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         item { Text("Profiles contain only readable NDEF messages. They do not copy UID, hardware identity, credentials, or protected data.") }
         item { TextButton(onClick = onShowProfiles, modifier = Modifier.fillMaxWidth()) { Text("Manage profiles (${profiles.size})") } }
+    }
+}
+
+@Composable
+private fun AttendanceMachineToolCard() {
+    var input by remember { mutableStateOf("0009248751") }
+    val cleaned = input.trim()
+
+    var facilityCode: Int? = null
+    var cardCode: Int? = null
+    var dec10Str: String? = null
+    var hexStr: String? = null
+
+    if (cleaned.contains(",")) {
+        val parts = cleaned.split(",")
+        facilityCode = parts.getOrNull(0)?.trim()?.toIntOrNull()
+        cardCode = parts.getOrNull(1)?.trim()?.toIntOrNull()
+        if (facilityCode != null && cardCode != null) {
+            val num24 = ((facilityCode and 0xFF) shl 16) or (cardCode and 0xFFFF)
+            dec10Str = "%010d".format(num24)
+            hexStr = "%06X".format(num24)
+        }
+    } else if (cleaned.length >= 8 && cleaned.all { it.isDigit() }) {
+        val num = cleaned.toLongOrNull()
+        if (num != null) {
+            val num24 = (num and 0xFFFFFF).toInt()
+            facilityCode = (num24 shr 16) and 0xFF
+            cardCode = num24 and 0xFFFF
+            dec10Str = "%010d".format(num24)
+            hexStr = "%06X".format(num24)
+        }
+    } else if (cleaned.length >= 4 && cleaned.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
+        val num = cleaned.toLongOrNull(16)
+        if (num != null) {
+            val num24 = (num and 0xFFFFFF).toInt()
+            facilityCode = (num24 shr 16) and 0xFF
+            cardCode = num24 and 0xFFFF
+            dec10Str = "%010d".format(num24)
+            hexStr = "%06X".format(num24)
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Biometric Attendance Card Converter & Diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Enter printed card numbers (e.g. 0009248751 or 141,08175) or hex UID to convert Wiegand 26-bit facility & card codes.")
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("Printed Card Number / Wiegand Code / Hex") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (facilityCode != null && cardCode != null) {
+                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Decoded Wiegand 26-Bit Values:", fontWeight = FontWeight.Bold)
+                        Detail("Facility Code", facilityCode.toString())
+                        Detail("Card Code", "%05d".format(cardCode))
+                        dec10Str?.let { Detail("10-Digit Attendance ID", it) }
+                        hexStr?.let { Detail("Hex Representation", "0x$it") }
+                    }
+                }
+            }
+            HorizontalDivider()
+            Text("Why Attendance Cards May Not Be Detected by Phone NFC:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            Text(
+                "• 125 kHz Proximity Cards (EM4100 / TK4100 / T5577): Many biometric attendance machines use 125 kHz Low Frequency (LF) cards (printed with numbers like 0009248751 141,08175). Smartphone NFC hardware is strictly 13.56 MHz High Frequency (HF) and physically cannot energize or detect 125 kHz LF cards.\n" +
+                "• Supported 13.56 MHz Attendance Tags: MIFARE Classic 1K/4K, MIFARE DESFire, NTAG213/215/216, MIFARE Ultralight, FeliCa, ICODE SLIX, ST25TV/DV/TN, and Topaz 512/1024 tags are all fully supported.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -252,6 +332,7 @@ private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel,
             TextButton(onClick = { vm.refreshTagCapabilities() }, modifier = Modifier.fillMaxWidth()) { Text("Re-scan current tag information") }
         }
         item { OverviewCard(tag) }
+        item { AttendanceCardSection(tag) }
         item { NdefStatusCard(tag, onFormat) }
         item { CapabilityMatrix(tag) }
         item { Text("NDEF data", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
@@ -266,10 +347,30 @@ private fun ResultScreen(modifier: Modifier, tag: TagSnapshot, vm: NfcViewModel,
 }
 
 @Composable private fun OverviewCard(tag: TagSnapshot) = InfoCard("Tag overview") {
+    tag.chipModel?.let { Detail("Chip / Model", it) }
     Detail("UID", tag.uid ?: unavailable())
     Detail("NDEF", tag.ndefAvailability.label)
     Detail("Write access", tag.writable?.let { if (it) "Writable" else "Read-only" } ?: if (tag.formatable) "Available after NDEF formatting" else "Unknown")
     Detail("Protection", tag.protection.label)
+}
+
+@Composable private fun AttendanceCardSection(tag: TagSnapshot) = InfoCard("Biometric Attendance Card Info") {
+    val info = tag.attendanceInfo
+    if (info != null) {
+        info.wiegand26Dec10?.let { Detail("10-Digit Attendance ID", it) }
+        if (info.wiegand26Facility != null && info.wiegand26Card != null) {
+            Detail("Wiegand 26-bit Format", "Facility: ${info.wiegand26Facility}, Card: %05d".format(info.wiegand26Card))
+        }
+        if (info.wiegand34Facility != null && info.wiegand34Card != null) {
+            Detail("Wiegand 34-bit Format", "Facility: ${info.wiegand34Facility}, Card: ${info.wiegand34Card}")
+        }
+        info.uidHexBigEndian?.let { Detail("UID (Big-Endian Hex)", it) }
+        info.uidHexLittleEndian?.let { Detail("UID (Little-Endian Hex)", it) }
+        Spacer(Modifier.height(4.dp))
+        Text(info.attendanceMachineNotes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        Text("No UID available to compute attendance machine card format.")
+    }
 }
 
 @Composable private fun NdefStatusCard(tag: TagSnapshot, onFormat: () -> Unit) = InfoCard("NDEF status") {
